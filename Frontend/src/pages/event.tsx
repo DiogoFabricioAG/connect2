@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
 import { useLanguage } from '../lib/LanguageContext';
-import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, getCurrentUser, importGuestsCsv, startEvent as startEventEdge, type Event as UiEvent } from '../lib/supabase';
+import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, getCurrentUser, importGuestsCsv, startEvent as startEventEdge, supabase as sbClient, type Event as UiEvent } from '../lib/supabase';
 import { config } from '../config';
 
 // Interfaz UI de sala (simplificada para visual)
@@ -61,6 +61,9 @@ export function EventPage() {
   const [startingEvent, setStartingEvent] = useState(false);
   const [startMsg, setStartMsg] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // Auto match & room mates
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [roomMates, setRoomMates] = useState<Array<{ id: string; name: string; badge?: number; found?: boolean }>>([]);
 
   useEffect(() => {
     // Cargar salas existentes al montar el componente
@@ -170,23 +173,108 @@ export function EventPage() {
     }
   };
 
-  const createVirtualPerson = async () => {
+  // Fetch other participants in the same room as a given guestId (top-level helper)
+  async function fetchRoomMatesForGuest(guestId: string) {
+    if (!eventInfo?.id) return [] as Array<{ id: string; name: string; badge?: number }>;
+    const { data: rel } = await sbClient
+      .from('room_participants')
+      .select('room_id')
+      .eq('guest_id', guestId)
+      .eq('event_id', eventInfo.id)
+      .limit(1)
+      .maybeSingle();
+  type RoomRel = { room_id?: string } | null;
+  const relTyped = rel as RoomRel;
+  const roomId = relTyped?.room_id;
+    if (!roomId) return [];
+    const { data: rels } = await sbClient
+      .from('room_participants')
+      .select('guest_id')
+      .eq('room_id', roomId);
+    const relsTyped = (rels as Array<{ guest_id: string }> | null) || [];
+    const otherIds = relsTyped
+      .map((r) => r.guest_id)
+      .filter((id: string) => id !== guestId);
+    if (!otherIds.length) return [];
+    const { data: mates } = await sbClient
+      .from('guests')
+      .select('id, full_name, badge_number, found')
+      .in('id', otherIds);
+    const matesTyped = (mates as Array<{ id: string; full_name?: string; badge_number?: number; found?: boolean }> | null) || [];
+    return matesTyped.map((g) => ({ id: g.id, name: g.full_name || 'Guest', badge: g.badge_number, found: g.found }));
+  }
+
+  // Auto find recommended partner from my badge number
+  async function autoFindPartner() {
+    if (!eventInfo?.id || !myBadgeNumber) return;
+    try {
+      setAutoLoading(true);
+      const { data, error } = await searchGuestEdge({ eventId: eventInfo.id }, myBadgeNumber, false);
+      if (error) throw error;
+      if (data?.found && data?.guest) {
+  const g = data.guest as { id: string; full_name?: string; name?: string; interests?: unknown; badge_number?: number; found?: boolean };
+        const number = typeof g.badge_number === 'number' ? g.badge_number : myBadgeNumber;
+        setMatchFound(true);
+        setMatchedPerson({
+          number,
+          name: (g.full_name as string) || (g.name as string) || `Person #${number}`,
+          interests: Array.isArray(g.interests) ? g.interests.filter((i: unknown): i is string => typeof i === 'string') : ['Networking'],
+          matched: true
+        });
+  // partnerFound eliminado; cada compañero contiene su propio estado 'found'
+  const mates = await fetchRoomMatesForGuest(g.id);
+        setRoomMates(mates);
+      }
+    } catch (e) {
+      console.error('autoFindPartner error:', e);
+    } finally {
+      setAutoLoading(false);
+    }
+  }
+
+  // Actualiza el estado "found" de un compañero de sala
+  async function toggleFoundForMate(mateBadge?: number, current?: boolean) {
+    if (!eventInfo?.id) return;
+    // Buscamos por badge (si existe), actualizamos por id cuando ya lo tengamos en estado
+    try {
+      const desired = !current;
+      // Si tenemos el id en nuestro estado, actualizamos directo en DB por id
+      const target = roomMates.find(m => m.badge === mateBadge);
+      if (target) {
+        const { error } = await sbClient
+          .from('guests')
+          .update({ found: desired })
+          .eq('id', target.id)
+          .eq('event_id', eventInfo.id);
+        if (error) throw error;
+        setRoomMates(prev => prev.map(m => m.id === target.id ? { ...m, found: desired } : m));
+      }
+    } catch (e) {
+      console.error('toggleFoundForMate error:', e);
+      alert(language === 'es' ? 'Error al actualizar estado' : 'Error updating status');
+    }
+  }
+
+  // Eliminado markPartnerAsFound: ahora cada compañero tendrá su propio toggle.
+
+  // Trigger auto suggestion when entering search tab
+  useEffect(() => {
+    if (activeTab === 'search') autoFindPartner();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, eventInfo?.id, myBadgeNumber]);
+
+  // Virtual assistant creator (simplified, no nested hooks)
+  function createVirtualPerson() {
     try {
       const greeting = language === 'es'
         ? '¡Hola! Soy Alex, tu asistente virtual. Estoy aquí para ayudarte a conectar con las personas ideales en este evento. ¿En qué puedo ayudarte?'
         : 'Hello! I\'m Alex, your virtual assistant. I\'m here to help you connect with the right people at this event. How can I help you?';
-      
-      setVirtualPerson({
-        id: '1',
-        name: 'Alex AI',
-        avatar: '🤖',
-        greeting: greeting
-      });
+      setVirtualPerson({ id: '1', name: 'Alex AI', avatar: '🤖', greeting });
       setShowVirtualAssistant(true);
     } catch (error) {
       console.error('Error creating virtual person:', error);
     }
-  };
+  }
 
   const startRecording = async () => {
     setIsRecording(true);
@@ -497,7 +585,10 @@ export function EventPage() {
       const pairs = data?.pairs_created ?? 0;
       // Refrescar estado local del evento
       setEventInfo(prev => prev ? { ...prev, status: 'published' } : prev);
-      setStartMsg(`🎫 ${language === 'es' ? 'Badges' : 'Badges'}: ${assigned} · 🚪 ${language === 'es' ? 'Salas' : 'Rooms'}: ${roomsCreated} · 🤝 ${language === 'es' ? 'Pareos' : 'Pairs'}: ${pairs}`);
+  const badgesLabel = 'Badges';
+  const roomsLabel = language === 'es' ? 'Salas' : 'Rooms';
+  const pairsLabel = language === 'es' ? 'Pareos' : 'Pairs';
+  setStartMsg(`🎫 ${badgesLabel}: ${assigned} · 🚪 ${roomsLabel}: ${roomsCreated} · 🤝 ${pairsLabel}: ${pairs}`);
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
       console.error('start event error:', err);
@@ -521,7 +612,7 @@ export function EventPage() {
             <img src={logoImage} alt="Connect2" className="logo-img" />
           </div>
           <div className="nav-info">
-            <span className="badge badge-primary">Badge #{myBadgeNumber}</span>
+            <span className="badge badge-primary">{language === 'es' ? 'Fotocheck' : 'Badge'} #{myBadgeNumber}</span>
             <span className="event-code-badge">{eventCode}</span>
           </div>
           <div className="nav-actions">
@@ -687,6 +778,54 @@ export function EventPage() {
           {/* Tab: Search Match */}
           {activeTab === 'search' && (
             <section className="tab-content">
+              {/* Automatic match suggestion */}
+              <div className="glass-effect" style={{ marginBottom: '1rem', padding: '1rem' }}>
+                <div className="section-header">
+                  <h2>{language === 'es' ? 'Sugerencia Automática de Match' : 'Automatic Match Suggestion'}</h2>
+                  <p style={{ color: 'var(--text-secondary)' }}>
+                    {language === 'es' ? 'Basado en tu sala actual te sugerimos hablar con:' : 'Based on your current room we suggest you talk to:'}
+                  </p>
+                </div>
+                {autoLoading && <span>⏳ {language === 'es' ? 'Buscando...' : 'Searching...'}</span>}
+                {!autoLoading && roomMates.length === 0 && (
+                  <span>🕵️ {language === 'es' ? 'No hay compañeros de sala aún.' : 'No room mates yet.'}</span>
+                )}
+                {!autoLoading && roomMates.length > 0 && (
+                  <div style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))' }}>
+                    {roomMates.map(m => (
+                      <div key={m.id} className="glass-effect" style={{ padding: '0.75rem', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)', position: 'relative' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                          <span style={{ fontSize: '1.25rem' }}>👤</span>
+                          <div style={{ flex: 1 }}>
+                            <strong style={{ display: 'block' }}>{m.name}</strong>
+                            {typeof m.badge === 'number' && (
+                              <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>{language === 'es' ? 'Fotocheck' : 'Badge'} #{m.badge}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button
+                            onClick={() => toggleFoundForMate(m.badge, m.found)}
+                            className={`btn ${m.found ? 'btn-success' : 'btn-outline'}`}
+                            style={{ flex: 1 }}
+                          >
+                            {m.found ? (language === 'es' ? '✅ Encontrado' : '✅ Found') : (language === 'es' ? 'Marcar Encontrado' : 'Mark Found')}
+                          </button>
+                          {m.found && (
+                            <button
+                              onClick={() => toggleFoundForMate(m.badge, m.found)}
+                              className="btn btn-danger"
+                              style={{ flex: 1 }}
+                            >
+                              {language === 'es' ? '❌ Revertir' : '❌ Undo'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="search-section glass-effect">
                 <div className="section-header">
                   <h2>{language === 'es' ? 'Encuentra tu Match de Networking' : 'Find Your Networking Match'}</h2>
@@ -719,7 +858,7 @@ export function EventPage() {
                         <div className="person-avatar">👤</div>
                         <div className="person-info">
                           <h4>{matchedPerson.name}</h4>
-                          <p>Badge #{matchedPerson.number}</p>
+                          <p>{language === 'es' ? 'Fotocheck' : 'Badge'} #{matchedPerson.number}</p>
                         </div>
                       </div>
                       <div className="match-interests">

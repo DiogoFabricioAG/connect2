@@ -28,6 +28,22 @@ export function CreateEventPage() {
   const [error, setError] = useState('');
   const [successCode, setSuccessCode] = useState('');
 
+  // Construye un objeto de preferencias a partir del textarea de hashtags/palabras clave
+  function buildPreferences(raw: string): Record<string, unknown> | null {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return null;
+    const parts = trimmed
+      .split(/[,;]\s*/)
+      .map(p => p.trim())
+      .filter(Boolean);
+    if (!parts.length) return null;
+    return {
+      tags: parts,
+      raw,
+      source: 'speakerInfo'
+    };
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -43,27 +59,16 @@ export function CreateEventPage() {
       }
 
       // Crear evento vía Edge Function (ver wrapper createEvent)
-      // Mapeamos sólo los campos soportados por el backend actual: { title, description, status }
+      // Incluimos 'preferences' a partir de speakerInfo
+      const preferences = buildPreferences(formData.speakerInfo);
       const { data, error: createError } = await createEvent({
         name: formData.title,
         description: formData.description,
-        status: 'published'
+        status: 'published',
+        preferences
       });
       
       if (createError) {
-
-            function buildPreferences(raw: string): Record<string, unknown> | null {
-              const trimmed = raw.trim();
-              if (!trimmed) return null;
-              const parts = trimmed.split(/[,;]\s*/).map(p => p.trim()).filter(Boolean);
-              if (!parts.length) return null;
-              return {
-                tags: parts,
-                raw,
-                source: 'speakerInfo'
-              };
-            }
-
         throw createError;
       }
 
