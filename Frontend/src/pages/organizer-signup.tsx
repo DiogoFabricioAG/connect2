@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
-import { translations } from '../lib/i18n';
 import { signUp } from '../lib/supabase';
 
 interface SignupFormData {
