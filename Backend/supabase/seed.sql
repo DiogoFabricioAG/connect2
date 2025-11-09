@@ -1,0 +1,14 @@
+-- Development seed data for connect2
+-- Example seed script for Supabase SQL Editor (copy/paste into the SQL editor to run)
+--
+-- with e as (
+--   insert into public.events (title, description, status)
+--   values ('Evento Demo', 'Evento de demostración inicial', 'live')
+--   returning id
+-- )
+-- insert into public.guests (event_id, full_name, email)
+-- select e.id, g.full_name, g.email from e cross join (values
+--   ('Alice Ejemplo','alice@example.com'),
+--   ('Bob Ejemplo','bob@example.com'),
+--   ('Carlos Ejemplo','carlos@example.com')
+-- ) as g(full_name,email);

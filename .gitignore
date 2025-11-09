@@ -1,0 +1,54 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Environment files (keep examples committed)
+.env
+.env.*
+!.env.example
+Backend/.env
+Backend/.env.*
+!Backend/.env.example
+Frontend/.env
+Frontend/.env.*
+!Frontend/.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build / caches
+/dist/
+/build/
+/out/
+.tmp/
+.temp/
+.cache/
+coverage/
+
+# Node
+node_modules/
+
+# Editor
+.vscode/
+.history/
+*.code-workspace
+
+# Supabase local artifacts (keep migrations & schema committed)
+supabase/.temp/
+supabase/.branches/
+supabase/.env
+supabase/.supabase
+
+# Supabase functions (Deno) transient folders
+supabase/functions/**/vendor/
+supabase/functions/**/.deno/
+supabase/functions/**/.dev/
+
+# Misc
+*.local
