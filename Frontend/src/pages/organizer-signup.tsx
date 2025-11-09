@@ -14,7 +14,6 @@ interface SignupFormData {
 
 export function OrganizerSignupPage() {
   const { language, toggleLanguage } = useLanguage();
-  const t = translations[language];
   const [formData, setFormData] = useState<SignupFormData>({
     name: '',
     email: '',
