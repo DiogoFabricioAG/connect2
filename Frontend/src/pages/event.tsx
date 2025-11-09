@@ -590,8 +590,8 @@ export function EventPage() {
                       <div className="match-interests">
                         <h5>{language === 'es' ? 'Intereses:' : 'Interests:'}</h5>
                         <div className="interests-tags">
-                          {matchedPerson.interests.map((interest, idx) => (
-                            <span key={idx} className="badge badge-secondary">{interest}</span>
+                          {matchedPerson.interests.map((interest) => (
+                            <span key={interest} className="badge badge-secondary">{interest}</span>
                           ))}
                         </div>
                       </div>
@@ -667,7 +667,18 @@ export function EventPage() {
                               const topicLabel = language === 'es' ? 'Tema' : 'Topic';
                               const participantsLabel = language === 'es' ? 'Participantes' : 'Participants';
                               const discussionLabel = language === 'es' ? 'Puntos de Discusión' : 'Discussion Points';
-                              alert(`🚪 ${room.name}\n\n📋 ${topicLabel}: ${room.topic}\n\n👥 ${participantsLabel}: ${room.participants.join(', ')}\n\n💬 ${discussionLabel}:\n${room.conversationTopics.map(t => `• ${t}`).join('\n')}`);
+                              const topicsList = room.conversationTopics.map(t => `• ${t}`).join('\n');
+                              const details = [
+                                `🚪 ${room.name}`,
+                                ``,
+                                `📋 ${topicLabel}: ${room.topic}`,
+                                ``,
+                                `👥 ${participantsLabel}: ${room.participants.join(', ')}`,
+                                ``,
+                                `💬 ${discussionLabel}:`,
+                                topicsList
+                              ].join('\n');
+                              alert(details);
                             }}
                           >
                             {language === 'es' ? 'Ver Detalles' : 'View Details'}
@@ -706,21 +717,21 @@ export function EventPage() {
                   </div>
 
                   <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
-                    {!isListening ? (
-                      <button
-                        onClick={startLiveTranscription}
-                        className="btn btn-primary btn-large"
-                        style={{ flex: 1 }}
-                      >
-                        🎙️ {language === 'es' ? 'Iniciar Transcripción' : 'Start Transcription'}
-                      </button>
-                    ) : (
+                    {isListening ? (
                       <button
                         onClick={stopLiveTranscription}
                         className="btn btn-outline btn-large"
                         style={{ flex: 1, animation: 'pulse 2s infinite' }}
                       >
                         ⏸️ {language === 'es' ? 'Detener Transcripción' : 'Stop Transcription'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={startLiveTranscription}
+                        className="btn btn-primary btn-large"
+                        style={{ flex: 1 }}
+                      >
+                        🎙️ {language === 'es' ? 'Iniciar Transcripción' : 'Start Transcription'}
                       </button>
                     )}
                   </div>
@@ -746,7 +757,7 @@ export function EventPage() {
                           </span>
                         </div>
                         {liveTranscript.map((line, idx) => (
-                          <div key={idx} style={{ 
+                          <div key={`${idx}-${line.slice(0, 12)}`} style={{ 
                             marginBottom: '0.5rem', 
                             padding: '0.5rem',
                             background: 'rgba(99, 102, 241, 0.1)',
@@ -805,14 +816,20 @@ export function EventPage() {
                     : 'Record your conversation to generate personalized questions'}</p>
                 </div>
                 
-                <button
-                  onClick={startRecording}
-                  className={`btn btn-large ${isRecording ? 'btn-recording pulse' : 'btn-primary'}`}
-                >
-                  {isRecording 
-                    ? (language === 'es' ? '⏺️ Grabando...' : '⏺️ Recording...') 
-                    : (language === 'es' ? '🎙️ Iniciar Grabación' : '🎙️ Start Recording')}
-                </button>
+                {(() => {
+                  const recordingLabel = isRecording
+                    ? (language === 'es' ? '⏺️ Grabando...' : '⏺️ Recording...')
+                    : (language === 'es' ? '🎙️ Iniciar Grabación' : '🎙️ Start Recording');
+                  const recordingClass = isRecording ? 'btn-recording pulse' : 'btn-primary';
+                  return (
+                    <button
+                      onClick={startRecording}
+                      className={`btn btn-large ${recordingClass}`}
+                    >
+                      {recordingLabel}
+                    </button>
+                  );
+                })()}
 
                 {transcription && (
                   <div className="transcript glass-effect">
@@ -909,8 +926,19 @@ export function EventPage() {
 
           {/* Virtual Assistant Modal */}
           {showVirtualAssistant && virtualPerson && (
-            <div className="modal-overlay" onClick={() => setShowVirtualAssistant(false)}>
-              <div className="modal glass-effect" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="modal-overlay"
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') setShowVirtualAssistant(false) }}
+              onClick={() => setShowVirtualAssistant(false)}
+            >
+              <div
+                className="modal glass-effect"
+                role="dialog"
+                aria-modal="true"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <div className="modal-header">
                   <h2>{language === 'es' ? 'Asistente Virtual' : 'Virtual Assistant'}</h2>
                   <button 

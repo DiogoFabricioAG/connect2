@@ -101,31 +101,70 @@ export const getCurrentUser = async () => {
 };
 
 // Event functions
+// Map DB schema (title/status/created_at) -> UI Event type (name/date/location/status)
+type RawEvent = {
+  id: string;
+  code: string;
+  title: string;
+  description?: string | null;
+  status: string; // draft | live | ended
+  preferences?: Record<string, unknown> | null;
+  created_at: string;
+};
+
+const mapRawEventToUI = (e: RawEvent): Event => {
+  // status mapping for UI expectations
+  let uiStatus: Event['status'];
+  if (e.status === 'live') uiStatus = 'published';
+  else if (e.status === 'ended') uiStatus = 'completed';
+  else uiStatus = 'draft';
+
+  return {
+    id: e.id,
+    code: e.code,
+    name: e.title,
+    description: e.description ?? null,
+    date: e.created_at, // fallback until schema adds a proper date
+    location: null,
+    luma_event_id: null,
+    speaker_info: null,
+    status: uiStatus,
+    created_at: e.created_at,
+    updated_at: e.created_at,
+  };
+};
+
 export const getEvents = async () => {
   const { data, error } = await supabase
     .from('events')
-    .select('*')
-    .eq('status', 'published')
-    .order('date', { ascending: true });
-  return { data, error };
+    .select('id, code, title, description, status, created_at')
+    .order('created_at', { ascending: true });
+  const mapped = Array.isArray(data) ? data.map(mapRawEventToUI) : [];
+  return { data: mapped, error };
 };
 
 export const getEventByCode = async (code: string) => {
   const { data, error } = await supabase
     .from('events')
-    .select('*')
+    .select('id, code, title, description, status, created_at')
     .eq('code', code)
     .single();
-  return { data, error };
+  return { data: data ? mapRawEventToUI(data as RawEvent) : null, error };
 };
 
 export const createEvent = async (eventData: Partial<Event>) => {
-  const { data, error } = await supabase
-    .from('events')
-    .insert(eventData)
-    .select()
-    .single();
-  return { data, error };
+  // Prefer using Edge Function to centralize logic & triggers
+  const statusMap: Record<string, string> = { published: 'live', completed: 'ended' };
+  const dbStatus = eventData.status ? (statusMap[eventData.status] || 'draft') : 'draft';
+  const payload = {
+    title: eventData.name as string,
+    description: eventData.description,
+    status: dbStatus,
+    code: eventData.code
+  };
+  const { data, error } = await supabase.functions.invoke<{ event: RawEvent }>('create-event', { body: payload });
+  const event = data?.event;
+  return { data: event ? mapRawEventToUI(event) : null, error };
 };
 
 // Guest functions

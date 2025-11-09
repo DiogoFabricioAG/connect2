@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
-import { getEvents, getCurrentUser, signOut, type Event } from '../lib/supabase';
+import { getEvents, getCurrentUser, signOut, type Event, assignBadges, generateRooms as generateRoomsEdge } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { translations } from '../lib/i18n';
 
@@ -16,8 +16,13 @@ export function EventsPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    checkAuth();
-    fetchEvents();
+    // Wrap in IIFE to satisfy dependency lint without recreating functions
+    (async () => {
+      await checkAuth();
+      await fetchEvents();
+    })();
+    // We intentionally omit functions from deps; they are stable (defined once)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const checkAuth = async () => {
@@ -95,6 +100,30 @@ export function EventsPage() {
     navigate(`/event/${eventCode}`);
   };
 
+  const handleAssignBadges = async (eventId: string) => {
+    try {
+      const { data, error } = await assignBadges(eventId);
+      if (error) throw error;
+      const count = (data && (data as unknown as { assigned?: number }).assigned) || 0;
+      alert(language === 'es' ? `🎫 Badges asignados: ${count}` : `🎫 Badges assigned: ${count}`);
+    } catch (err) {
+      console.error('assign badges error', err);
+      alert(language === 'es' ? 'Error asignando badges' : 'Error assigning badges');
+    }
+  };
+
+  const handleGenerateRooms = async (eventCode: string) => {
+    try {
+      const { data, error } = await generateRoomsEdge({ eventCode }, 5);
+      if (error) throw error;
+      const rooms = (data && (data as unknown as { rooms?: unknown[] }).rooms) || [];
+      alert(language === 'es' ? `🚪 Salas generadas: ${rooms.length}` : `🚪 Rooms generated: ${rooms.length}`);
+    } catch (err) {
+      console.error('generate rooms error', err);
+      alert(language === 'es' ? 'Error generando salas' : 'Error generating rooms');
+    }
+  };
+
   const filteredEvents = events.filter(event => {
     const matchesSearch = event.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          event.description?.toLowerCase().includes(searchQuery.toLowerCase());
@@ -130,6 +159,9 @@ export function EventsPage() {
             <img src={logoImage} alt="Connect2 Logo" className="logo-img" />
           </div>
           <div className="nav-actions">
+            <button onClick={() => navigate('/create-event')} className="btn btn-primary" title={language === 'es' ? 'Crear nuevo evento' : 'Create new event'}>
+              ➕ {language === 'es' ? 'Crear Evento' : 'Create Event'}
+            </button>
             <button className="btn btn-glass">
               <span>👤</span> {userName}
             </button>
@@ -189,55 +221,81 @@ export function EventsPage() {
         </div>
 
         {/* Events Grid */}
-        {loading ? (
-          <div className="loading-state">
-            <div className="loader"></div>
-            <p>{t.loadingEvents}</p>
-          </div>
-        ) : filteredEvents.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">🎪</div>
-            <h3>{t.noEventsFound}</h3>
-            <p>{t.tryDifferentSearch}</p>
-          </div>
-        ) : (
-          <div className="events-grid">
-            {filteredEvents.map((event) => (
-              <div key={event.id} className="event-card glass-effect">
-                <div className="event-badge badge-gradient">{event.code}</div>
-                
-                <div className="event-header">
-                  <h3>{event.name}</h3>
-                  <p className="event-description">{event.description}</p>
-                </div>
-
-                <div className="event-meta">
-                  <div className="meta-item">
-                    <span className="meta-icon">📅</span>
-                    <span>{formatDate(event.date)}</span>
-                  </div>
-                  <div className="meta-item">
-                    <span className="meta-icon">📍</span>
-                    <span>{event.location || (language === 'es' ? 'Por anunciar' : 'TBA')}</span>
-                  </div>
-                  <div className="meta-item">
-                    <span className="meta-icon">✨</span>
-                    <span className="status-badge status-published">
-                      {event.status === 'published' ? t.available : event.status}
-                    </span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => handleJoinEvent(event.code)}
-                  className="btn btn-primary btn-block"
-                >
-                  {t.joinEventButton}
-                </button>
+        {(() => {
+          if (loading) {
+            return (
+              <div className="loading-state">
+                <div className="loader"></div>
+                <p>{t.loadingEvents}</p>
               </div>
-            ))}
-          </div>
-        )}
+            );
+          }
+          if (filteredEvents.length === 0) {
+            return (
+              <div className="empty-state">
+                <div className="empty-icon">🎪</div>
+                <h3>{t.noEventsFound}</h3>
+                <p>{t.tryDifferentSearch}</p>
+              </div>
+            );
+          }
+          return (
+            <div className="events-grid">
+              {filteredEvents.map((ev) => {
+                return (
+                  <div key={ev.id} className="event-card glass-effect">
+                    <div className="event-badge badge-gradient">{ev.code}</div>
+
+                    <div className="event-header">
+                      <h3>{ev.name}</h3>
+                      <p className="event-description">{ev.description}</p>
+                    </div>
+
+                    <div className="event-meta">
+                      <div className="meta-item">
+                        <span className="meta-icon">📅</span>
+                        <span>{formatDate(ev.date)}</span>
+                      </div>
+                      <div className="meta-item">
+                        <span className="meta-icon">📍</span>
+                        <span>{ev.location || (language === 'es' ? 'Por anunciar' : 'TBA')}</span>
+                      </div>
+                      <div className="meta-item">
+                        <span className="meta-icon">✨</span>
+                        <span className="status-badge status-published">
+                          {ev.status === 'published' ? t.available : ev.status}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="card-actions-row">
+                      <button
+                        onClick={() => handleJoinEvent(ev.code)}
+                        className="btn btn-primary"
+                      >
+                        {t.joinEventButton}
+                      </button>
+                      <button
+                        onClick={() => handleAssignBadges(ev.id)}
+                        className="btn btn-outline"
+                        title={language === 'es' ? 'Asignar badges' : 'Assign badges'}
+                      >
+                        🎫 Badges
+                      </button>
+                      <button
+                        onClick={() => handleGenerateRooms(ev.code)}
+                        className="btn btn-outline"
+                        title={language === 'es' ? 'Generar salas' : 'Generate rooms'}
+                      >
+                        🚪 {language === 'es' ? 'Salas' : 'Rooms'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

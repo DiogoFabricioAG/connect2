@@ -19,8 +19,6 @@ export const config = {
     url: getEnv('VITE_SUPABASE_URL', true) || "https://qaojiegniarmaunutelh.supabase.co",
     anonKey: getEnv('VITE_SUPABASE_ANON_KEY', true) || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhb2ppZWduaWFybWF1bnV0ZWxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI2NDA5MDUsImV4cCI6MjA3ODIxNjkwNX0.76dRokqEWZ1R0GVBabxC7X9Cr1pOJwO6zDSplaAUspY"
   },
-  // Claves sensibles como OPENAI_API_KEY, ELEVENLABS_API_KEY, RESEND_API_KEY se deben usar SOLO vía backend.
-  // Si realmente necesitas una clave en el cliente (no recomendado), añade su prefijo público y asume riesgo.
   openai: {
     apiKey: getEnv('VITE_OPENAI_API_KEY') // opcional, debería permanecer vacío en producción
   },
@@ -29,8 +27,7 @@ export const config = {
     voiceId: getEnv('VITE_ELEVENLABS_VOICE_ID') || '21m00Tcm4TlvDq8ikWAM'
   },
   endpoints: {
-    // Facilidad para construir URLs a Edge Functions
-    functionsBase: getEnv('VITE_FUNCTIONS_BASE') || `${getEnv('VITE_SUPABASE_URL')}/functions/v1`
+    functionsBase: getEnv('VITE_FUNCTIONS_BASE') || `https://qaojiegniarmaunutelh.supabase.co/functions/v1`
   }
 }
 

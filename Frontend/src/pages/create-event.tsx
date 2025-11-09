@@ -11,15 +11,7 @@ interface EventFormData {
   speakerInfo: string;
 }
 
-// Generar código único de 6 caracteres
-const generateEventCode = () => {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-};
+// El código del evento ahora lo genera el backend (o se puede pasar opcionalmente)
 
 export function CreateEventPage() {
   const navigate = useNavigate();
@@ -50,40 +42,27 @@ export function CreateEventPage() {
         return;
       }
 
-      // Generar código único para el evento
-      const eventCode = generateEventCode();
-      
-      // Crear evento en Supabase
-      const eventData = {
-        code: eventCode,
+      // Crear evento vía Edge Function (ver wrapper createEvent)
+      // Mapeamos sólo los campos soportados por el backend actual: { title, description, status }
+      const { data, error: createError } = await createEvent({
         name: formData.title,
         description: formData.description,
-        date: formData.date,
-        luma_event_id: formData.lumaId,
-        speaker_info: {
-          bio: formData.speakerInfo,
-          topics: []
-        },
-        status: 'published' as const,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-
-      const { error: createError } = await createEvent(eventData);
+        status: 'published'
+      });
       
       if (createError) {
         throw createError;
       }
 
       // Mostrar código del evento
-      setSuccessCode(eventCode);
+      setSuccessCode(data?.code || '');
       
       // Redirigir a eventos después de 3 segundos
       setTimeout(() => {
         navigate('/events');
       }, 3000);
       
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error creating event:', err);
       setError(language === 'es' 
         ? 'Error al crear el evento. Por favor intenta de nuevo.' 
@@ -183,14 +162,14 @@ export function CreateEventPage() {
               </div>
 
               <div className="form-group">
-                <label>{language === 'es' ? 'Fecha y Hora del Evento' : 'Event Date & Time'}</label>
+                <label>{language === 'es' ? 'Fecha y Hora del Evento (opcional)' : 'Event Date & Time (optional)'}</label>
                 <div className="input-group">
                   <input
                     type="datetime-local"
                     name="date"
                     value={formData.date}
                     onChange={handleChange}
-                    required
+                    
                     disabled={loading}
                   />
                   <span className="input-icon">🕐</span>
@@ -217,7 +196,7 @@ export function CreateEventPage() {
                     value={formData.lumaId}
                     onChange={handleChange}
                     placeholder="evt-xxxxxxxxxx"
-                    required
+                    
                     disabled={loading}
                   />
                   <span className="input-icon">🔗</span>
@@ -245,7 +224,7 @@ export function CreateEventPage() {
                   placeholder={language === 'es'
                     ? 'Ingresa la bio del ponente, temas y puntos clave de discusión...'
                     : 'Enter speaker bio, topics, and key discussion points...'}
-                  required
+                  
                   disabled={loading}
                 />
               </div>
@@ -260,16 +239,26 @@ export function CreateEventPage() {
               >
                 ← {language === 'es' ? 'Cancelar' : 'Cancel'}
               </button>
-              <button 
-                type="submit" 
-                className="btn btn-primary btn-large"
-                disabled={loading}
-              >
-                {loading 
-                  ? (language === 'es' ? 'Creando...' : 'Creating...') 
-                  : (language === 'es' ? 'Crear Evento 🚀' : 'Create Event 🚀')
+              {(() => {
+                let label = '';
+                if (loading) {
+                  if (language === 'es') label = 'Creando...';
+                  else label = 'Creating...';
+                } else if (language === 'es') {
+                  label = 'Crear Evento 🚀';
+                } else {
+                  label = 'Create Event 🚀';
                 }
-              </button>
+                return (
+                  <button
+                    type="submit"
+                    className="btn btn-primary btn-large"
+                    disabled={loading}
+                  >
+                    {label}
+                  </button>
+                );
+              })()}
             </div>
           </form>
 
