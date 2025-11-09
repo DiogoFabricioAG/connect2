@@ -2,8 +2,11 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
 import { useLanguage } from '../lib/LanguageContext';
+import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge } from '../lib/supabase';
+import { config } from '../config';
 
-interface Room {
+// Interfaz UI de sala (simplificada para visual)
+interface UiRoom {
   id: string;
   name: string;
   topic: string;
@@ -36,7 +39,7 @@ export function EventPage() {
   const navigate = useNavigate();
   const { language, toggleLanguage } = useLanguage();
   const [searchNumber, setSearchNumber] = useState('');
-  const [rooms, setRooms] = useState<Room[]>([]);
+  const [rooms, setRooms] = useState<UiRoom[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [matchFound, setMatchFound] = useState(false);
   const [matchedPerson, setMatchedPerson] = useState<Badge | null>(null);
@@ -47,100 +50,101 @@ export function EventPage() {
   const [showVirtualAssistant, setShowVirtualAssistant] = useState(false);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
   const [activeTab, setActiveTab] = useState<'search' | 'rooms' | 'questions'>('search');
-  const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
+  const [currentRoom, setCurrentRoom] = useState<UiRoom | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState<string[]>([]);
 
   useEffect(() => {
     // Cargar salas existentes al montar el componente
     fetchRooms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventCode]);
 
   const fetchRooms = async () => {
+    if (!eventCode) return;
     try {
-      const response = await fetch(`/api/generate-rooms/${eventCode}`);
-      const data = await response.json();
-      setRooms(data.rooms);
+      const { data, error } = await generateRoomsEdge({ eventCode }, 5);
+      if (error) throw error;
+  const rawRooms = Array.isArray(data?.rooms) ? (data?.rooms as unknown[]) : [];
+  const uiRooms: UiRoom[] = rawRooms.map((r, idx) => formatRoom(r as Record<string, unknown>, idx));
+      setRooms(uiRooms);
     } catch (error) {
       console.error('Error fetching rooms:', error);
     }
   };
 
+  function formatRoom(roomObj: Record<string, unknown>, idx: number): UiRoom {
+  const topicsSource = roomObj.conversation_topics ?? roomObj.topics;
+    let conversationTopics: string[] = [];
+    if (Array.isArray(topicsSource)) {
+      conversationTopics = topicsSource.filter((t): t is string => typeof t === 'string');
+    } else if (typeof topicsSource === 'string') {
+      conversationTopics = topicsSource.split(',').map(t => t.trim()).filter(Boolean);
+    }
+    const participantsRaw = roomObj.participants;
+    const participants = Array.isArray(participantsRaw)
+      ? participantsRaw.filter((p): p is string => typeof p === 'string')
+      : [];
+    return {
+      id: (roomObj.id as string) || (roomObj.room_id as string) || `room-${idx}`,
+      name: (roomObj.name as string) || (roomObj.title as string) || `Room ${idx + 1}`,
+      topic: (roomObj.topic as string) || (roomObj.main_topic as string) || (roomObj.theme as string) || 'General',
+      participants,
+      conversationTopics
+    };
+  }
+
   const handleSearchGuest = async () => {
     try {
-      const response = await fetch(`/api/search-guest`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          eventCode,
-          searchNumber,
-        }),
-      });
-      const data = await response.json();
-      setMatchFound(data.found);
-      
-      if (data.found) {
+      if (!eventCode || !searchNumber) return;
+      const number = Number.parseInt(searchNumber, 10);
+      const { data, error } = await searchGuestEdge({ eventCode }, number, false);
+      if (error) throw error;
+      setMatchFound(!!data?.found);
+      if (data?.found && data?.guest) {
+        const g: any = data.guest as any;
         setMatchedPerson({
-          number: parseInt(searchNumber),
-          name: data.name || `Person #${searchNumber}`,
-          interests: data.interests || ['Networking', 'Tech'],
+          number,
+          name: g.full_name || g.name || `Person #${number}`,
+          interests: Array.isArray(g.interests) ? g.interests : ['Networking', 'Tech'],
           matched: true
         });
-        // Generar preguntas automáticamente al encontrar match
-        await generateQuestions(data.context || '');
+        // Generar preguntas automáticamente (sin contexto específico por ahora)
+        await generateQuestions();
       }
     } catch (error) {
       console.error('Error searching for guest:', error);
-      // Mock para demostración
-      setMatchFound(true);
-      setMatchedPerson({
-        number: parseInt(searchNumber),
-        name: `Sarah Johnson`,
-        interests: ['AI', 'Startups', 'Innovation'],
-        matched: true
-      });
-      // Generar preguntas mock
-      setQuestions([
-        { id: '1', text: '¿Qué aspecto de la inteligencia artificial te apasiona más?', category: 'AI' },
-        { id: '2', text: '¿En qué startup o proyecto estás trabajando actualmente?', category: 'Startups' },
-        { id: '3', text: '¿Cuál crees que será la próxima gran innovación en tech?', category: 'Innovation' }
-      ]);
     }
   };
 
   const generateRooms = async () => {
     try {
-      const response = await fetch(`/api/generate-rooms/${eventCode}`);
-      const data = await response.json();
-      setRooms(data.rooms);
+      if (!eventCode) return;
+      const { data, error } = await generateRoomsEdge({ eventCode }, 5);
+      if (error) throw error;
+      const rawRooms = data?.rooms || [];
+      const uiRooms: UiRoom[] = rawRooms.map((r: unknown, idx: number) => {
+        const roomObj = r as Record<string, unknown>;
+        const topicsSource = roomObj.conversation_topics || roomObj.topics;
+        let conversationTopics: string[] = [];
+        if (Array.isArray(topicsSource)) {
+          conversationTopics = topicsSource.filter((t: unknown): t is string => typeof t === 'string');
+        } else if (typeof topicsSource === 'string') {
+          conversationTopics = topicsSource.split(',').map((t) => t.trim()).filter(Boolean);
+        }
+        return {
+          id: (roomObj.id as string) || (roomObj.room_id as string) || `room-${idx}`,
+          name: (roomObj.name as string) || (roomObj.title as string) || `Room ${idx + 1}`,
+          topic: (roomObj.topic as string) || (roomObj.main_topic as string) || (roomObj.theme as string) || 'General',
+          participants: Array.isArray(roomObj.participants)
+            ? (roomObj.participants as unknown[]).filter((p: unknown): p is string => typeof p === 'string')
+            : [],
+          conversationTopics
+        };
+      });
+      setRooms(uiRooms);
     } catch (error) {
       console.error('Error generating rooms:', error);
-      // Mock data
-      setRooms([
-        {
-          id: '1',
-          name: 'AI & Machine Learning',
-          topic: 'Latest trends in AI development',
-          participants: ['Alice', 'Bob', 'Charlie'],
-          conversationTopics: ['GPT-4', 'Neural Networks', 'AutoML']
-        },
-        {
-          id: '2',
-          name: 'Startup Ecosystem',
-          topic: 'Building successful startups',
-          participants: ['David', 'Emma'],
-          conversationTopics: ['Fundraising', 'Product-Market Fit', 'Scaling']
-        },
-        {
-          id: '3',
-          name: 'Web3 & Blockchain',
-          topic: 'Decentralized future',
-          participants: ['Frank', 'Grace', 'Henry', 'Ivy'],
-          conversationTopics: ['DeFi', 'NFTs', 'Smart Contracts']
-        }
-      ]);
     }
   };
 
@@ -165,12 +169,12 @@ export function EventPage() {
   const startRecording = async () => {
     setIsRecording(true);
     try {
-      const response = await fetch(`/api/transcribe-talk/${eventCode}`, {
-        method: 'POST',
-      });
-      const data = await response.json();
-      setTranscription(data.text);
-      await generateQuestions(data.text);
+      if (!eventCode) return;
+      const { data, error } = await transcribeTalkEdge({ eventCode });
+      if (error) throw error;
+      const text = data?.talk?.transcript || '';
+      setTranscription(text);
+      await generateQuestions(text);
     } catch (error) {
       console.error('Error recording:', error);
     } finally {
@@ -181,18 +185,13 @@ export function EventPage() {
   const generateQuestions = async (context: string = '') => {
     setGeneratingQuestions(true);
     try {
-      const response = await fetch(`/api/generate-questions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          eventCode,
-          context: context || transcription,
-        }),
-      });
-      const data = await response.json();
-      setQuestions(data.questions);
+      if (!eventCode) return;
+      const { data, error } = await generateQuestionsEdge({ eventCode }, currentRoom?.id, 5, context || transcription);
+      if (error) throw error;
+      // La función devuelve { questions: rows } con campo 'content'
+  interface RawQuestion { id: string; content: string; context?: { source?: string }; }
+  const mapped = (data?.questions || []).map((q: RawQuestion) => ({ id: q.id, text: q.content, category: q.context?.source || 'AI' }));
+      setQuestions(mapped);
     } catch (error) {
       console.error('Error generating questions:', error);
     } finally {
@@ -200,7 +199,7 @@ export function EventPage() {
     }
   };
 
-  const joinRoom = (room: Room) => {
+  const joinRoom = (room: UiRoom) => {
     setCurrentRoom(room);
     setActiveTab('questions'); // Switch to questions tab
     // Auto-generar preguntas cuando entras a la sala
@@ -215,7 +214,7 @@ export function EventPage() {
     setIsListening(false);
   };
 
-  const generateRoomQuestions = (room: Room) => {
+  const generateRoomQuestions = (room: UiRoom) => {
     // Generar preguntas basadas en los temas de la sala
     const roomQuestions = room.conversationTopics.map((topic, idx) => ({
       id: `room-q-${idx}`,
@@ -240,15 +239,34 @@ export function EventPage() {
   };
 
   const startLiveTranscription = async () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    if (!('webkitSpeechRecognition' in globalThis) && !('SpeechRecognition' in globalThis)) {
       alert(language === 'es' 
         ? '⚠️ Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.'
         : '⚠️ Your browser doesn\'t support speech recognition. Use Chrome or Edge.');
       return;
     }
 
-    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-    const recognition = new SpeechRecognition();
+    // Tipos mínimos para evitar any
+    type RecognitionCtor = new () => ISpeechRecognition;
+    interface ISpeechRecognition {
+      start: () => void;
+      stop: () => void;
+      continuous: boolean;
+      interimResults: boolean;
+      lang: string;
+      onstart: (() => void) | null;
+      onresult: ((event: ISpeechRecognitionEvent) => void) | null;
+      onerror: ((event: unknown) => void) | null;
+      onend: (() => void) | null;
+    }
+    interface ISpeechRecognitionAlternative { transcript: string }
+    interface ISpeechRecognitionResult { isFinal: boolean; 0: ISpeechRecognitionAlternative }
+    interface ISpeechRecognitionEvent { resultIndex: number; results: ISpeechRecognitionResult[] }
+
+  const w = globalThis as unknown as { webkitSpeechRecognition?: RecognitionCtor; SpeechRecognition?: RecognitionCtor };
+    const Ctor = w.webkitSpeechRecognition || w.SpeechRecognition;
+    if (!Ctor) return;
+    const recognition = new Ctor();
     
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -259,16 +277,13 @@ export function EventPage() {
       console.log('🎤 Listening...');
     };
 
-    recognition.onresult = (event: any) => {
-      let interimTranscript = '';
+    recognition.onresult = (event: ISpeechRecognitionEvent) => {
       let finalTranscript = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
           finalTranscript += transcript + ' ';
-        } else {
-          interimTranscript += transcript;
         }
       }
 
@@ -293,8 +308,8 @@ export function EventPage() {
       }
     };
 
-    recognition.onerror = (event: any) => {
-      console.error('Speech recognition error:', event.error);
+    recognition.onerror = (err: unknown) => {
+      console.error('Speech recognition error:', err);
       setIsListening(false);
     };
 
@@ -403,47 +418,21 @@ export function EventPage() {
 
   const speakText = async (text: string) => {
     try {
-      // Llamar directamente a ElevenLabs API
-      const ELEVENLABS_API_KEY = 'sk_156d850d871c3711ec6a4c492f687830866e1535d1a125b8';
-      const VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel voice
-      
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'audio/mpeg',
-          'Content-Type': 'application/json',
-          'xi-api-key': ELEVENLABS_API_KEY
-        },
-        body: JSON.stringify({
-          text: text,
-          model_id: 'eleven_monolingual_v1',
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.5
-          }
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error(`ElevenLabs API error: ${response.status}`);
-      }
-      
-      const blob = await response.blob();
+      const { data, error } = await speakTextEdge(text, config.elevenlabs.voiceId);
+      if (error) throw error;
+      const b64 = data?.audio_base64;
+      if (!b64) throw new Error('Audio vacío');
+      const byteArray = Uint8Array.from(atob(b64), c => c.codePointAt(0) ?? 0);
+      const blob = new Blob([byteArray], { type: data?.mime || 'audio/mpeg' });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
-      };
-      
-      audio.play();
-      
-      console.log('🔊 Playing audio...');
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
     } catch (error) {
       console.error('Error speaking text:', error);
-      alert(language === 'es' 
-        ? '⚠️ Error al reproducir audio. Por favor intenta de nuevo.'
-        : '⚠️ Error playing audio. Please try again.');
+      alert(language === 'es'
+        ? '⚠️ Error al reproducir audio. Intenta de nuevo.'
+        : '⚠️ Error playing audio. Try again.');
     }
   };
 
@@ -528,8 +517,8 @@ export function EventPage() {
               <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-md)' }}>
                 <strong>{language === 'es' ? 'Participantes:' : 'Participants:'}</strong>
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                  {currentRoom.participants.map((participant, idx) => (
-                    <span key={idx} className="badge badge-secondary">
+                  {currentRoom.participants.map((participant) => (
+                    <span key={participant} className="badge badge-secondary">
                       👤 {participant}
                     </span>
                   ))}
@@ -660,8 +649,8 @@ export function EventPage() {
                           <div className="room-topics">
                             <strong>{language === 'es' ? 'Puntos de Discusión:' : 'Discussion Points:'}</strong>
                             <div className="topics-tags">
-                              {room.conversationTopics.map((topic, idx) => (
-                                <span key={idx} className="topic-tag">{topic}</span>
+                              {room.conversationTopics.map((topic) => (
+                                <span key={topic} className="topic-tag">{topic}</span>
                               ))}
                             </div>
                           </div>
@@ -867,9 +856,12 @@ export function EventPage() {
                     className="btn btn-outline"
                     disabled={generatingQuestions}
                   >
-                    {generatingQuestions 
-                      ? (language === 'es' ? '⏳ Generando...' : '⏳ Generating...') 
-                      : (language === 'es' ? '✨ Generar Nuevas Preguntas' : '✨ Generate New Questions')}
+                    {(() => {
+                      if (generatingQuestions) {
+                        return language === 'es' ? '⏳ Generando...' : '⏳ Generating...';
+                      }
+                      return language === 'es' ? '✨ Generar Nuevas Preguntas' : '✨ Generate New Questions';
+                    })()}
                   </button>
                 </div>
 

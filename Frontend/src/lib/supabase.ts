@@ -1,11 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
+import { config } from '../config';
 
-const supabaseUrl = 'https://qaojiegniarmaunutelh.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhb2ppZWduaWFybWF1bnV0ZWxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI2NDA5MDUsImV4cCI6MjA3ODIxNjkwNX0.76dRokqEWZ1R0GVBabxC7X9Cr1pOJwO6zDSplaAUspY';
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(config.supabase.url, config.supabase.anonKey);
 
 // Database Types
+export interface SpeakerInfo {
+  bio?: string;
+  topics?: string[];
+  [key: string]: unknown;
+}
+
 export interface Event {
   id: string;
   code: string;
@@ -14,10 +18,16 @@ export interface Event {
   date: string;
   location: string | null;
   luma_event_id: string | null;
-  speaker_info: any | null;
+  speaker_info: SpeakerInfo | null;
   status: 'draft' | 'published' | 'ongoing' | 'completed';
   created_at: string;
   updated_at: string;
+}
+
+export interface GuestPreferences {
+  networking_style?: string;
+  availability?: string[];
+  [key: string]: unknown;
 }
 
 export interface Guest {
@@ -27,7 +37,7 @@ export interface Guest {
   name: string | null;
   badge_number: number | null;
   interests: string[] | null;
-  preferences: any | null;
+  preferences: GuestPreferences | null;
   luma_registered: boolean;
   checked_in: boolean;
   created_at: string;
@@ -43,6 +53,11 @@ export interface Room {
   created_at: string;
 }
 
+export interface QuestionContext {
+  source?: string;
+  [key: string]: unknown;
+}
+
 export interface Question {
   id: string;
   event_id: string;
@@ -50,18 +65,18 @@ export interface Question {
   guest2_id: string;
   question_text: string;
   category: string;
-  context: any | null;
+  context: QuestionContext | null;
   created_at: string;
 }
 
 // Auth helpers
-export const signUp = async (email: string, password: string, metadata?: any) => {
+export const signUp = async (email: string, password: string, metadata?: Record<string, unknown>) => {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: metadata,
-      emailRedirectTo: window.location.origin + '/events'
+  emailRedirectTo: globalThis.location.origin + '/events'
     }
   });
   return { data, error };
@@ -104,7 +119,7 @@ export const getEventByCode = async (code: string) => {
   return { data, error };
 };
 
-export const createEvent = async (eventData: any) => {
+export const createEvent = async (eventData: Partial<Event>) => {
   const { data, error } = await supabase
     .from('events')
     .insert(eventData)
@@ -134,7 +149,7 @@ export const getGuestByBadge = async (badgeNumber: number, eventId: string) => {
   return { data, error };
 };
 
-export const updateGuestInterests = async (guestId: string, interests: string[], preferences: any) => {
+export const updateGuestInterests = async (guestId: string, interests: string[], preferences: GuestPreferences) => {
   const { data, error } = await supabase
     .from('guests')
     .update({ interests, preferences, updated_at: new Date().toISOString() })
@@ -155,42 +170,28 @@ export const checkInGuest = async (guestId: string) => {
 };
 
 // Edge Functions calls
-export const callEdgeFunction = async (functionName: string, payload: any) => {
+export const callEdgeFunction = async <T = unknown>(functionName: string, payload: Record<string, unknown>) => {
   const { data, error } = await supabase.functions.invoke(functionName, {
     body: payload
   });
-  return { data, error };
+  return { data: data as T, error };
 };
 
 // Specific Edge Function wrappers
-export const assignBadges = async (eventId: string) => {
-  return callEdgeFunction('assign-badges', { eventId });
-};
+export const assignBadges = async (eventId: string) => callEdgeFunction<{ assigned: number }>('assign-badges', { eventId });
 
-export const searchGuest = async (eventId: string, badgeNumber: number) => {
-  return callEdgeFunction('search-guest', { eventId, badgeNumber });
-};
+type EventRef = { eventId?: string; eventCode?: string };
 
-export const generateRooms = async (eventId: string) => {
-  return callEdgeFunction('generate-rooms', { eventId });
-};
+export const searchGuest = async (ref: EventRef, badgeNumber: number, markFound = false) => callEdgeFunction<{ found: boolean; guest?: Guest }>('search-guest', { ...ref, badgeNumber, markFound });
 
-export const generateQuestions = async (eventId: string, guest1Id: string, guest2Id: string) => {
-  return callEdgeFunction('generate-questions', { eventId, guest1Id, guest2Id });
-};
+export const generateRooms = async (ref: EventRef, count = 5, prefix?: string) => callEdgeFunction<{ rooms: Room[] }>('generate-rooms', { ...ref, count, prefix });
 
-export const transcribeTalk = async (audioBase64: string, eventId: string) => {
-  return callEdgeFunction('transcribe-talk', { audioBase64, eventId });
-};
+export const generateQuestions = async (ref: EventRef, roomId?: string, limit = 5, context?: string) => callEdgeFunction<{ questions: { id: string; content: string; context: QuestionContext }[] }>('generate-questions', { ...ref, roomId, limit, context });
 
-export const speakText = async (text: string, voiceId?: string) => {
-  return callEdgeFunction('speak-text', { text, voiceId });
-};
+export const transcribeTalk = async (ref: EventRef, audioBase64?: string, audioUrl?: string, speaker?: string, contentType?: string) => callEdgeFunction<{ talk: { id: string; transcript: string } }>('transcribe-talk', { ...ref, audio_base64: audioBase64, audio_url: audioUrl, speaker, content_type: contentType });
 
-export const createVirtualPerson = async (eventId: string, guestId: string) => {
-  return callEdgeFunction('create-virtual-person', { eventId, guestId });
-};
+export const speakText = async (text: string, voiceId?: string) => callEdgeFunction<{ audio_base64: string; mime: string }>('speak-text', { text, voice_id: voiceId });
 
-export const notifyGuest = async (email: string, eventCode: string, type: 'welcome' | 'registration' | 'update') => {
-  return callEdgeFunction('notify-guest', { email, eventCode, type });
-};
+export const createVirtualPerson = async (ref: EventRef, displayName: string, personaProfile?: Record<string, unknown>) => callEdgeFunction<{ virtual_person: { id: string; display_name: string } }>('create-virtual-person', { ...ref, display_name: displayName, persona_profile: personaProfile });
+
+export const notifyGuest = async (email: string, eventCode: string, fullName?: string, extra?: Record<string, unknown>) => callEdgeFunction<{ mode: string; guest: Guest }>('notify-guest', { email, eventCode, full_name: fullName, extra });

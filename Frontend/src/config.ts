@@ -16,8 +16,8 @@ function getEnv(name: string, required = false): string {
 
 export const config = {
   supabase: {
-    url: getEnv('VITE_SUPABASE_URL', true),
-    anonKey: getEnv('VITE_SUPABASE_ANON_KEY', true)
+    url: getEnv('VITE_SUPABASE_URL', true) || "https://qaojiegniarmaunutelh.supabase.co",
+    anonKey: getEnv('VITE_SUPABASE_ANON_KEY', true) || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhb2ppZWduaWFybWF1bnV0ZWxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI2NDA5MDUsImV4cCI6MjA3ODIxNjkwNX0.76dRokqEWZ1R0GVBabxC7X9Cr1pOJwO6zDSplaAUspY"
   },
   // Claves sensibles como OPENAI_API_KEY, ELEVENLABS_API_KEY, RESEND_API_KEY se deben usar SOLO vía backend.
   // Si realmente necesitas una clave en el cliente (no recomendado), añade su prefijo público y asume riesgo.
