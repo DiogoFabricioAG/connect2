@@ -21,7 +21,7 @@ async function sendEmail(apiKey: string, opts: ResendEmailOptions) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      from: 'Connect2 <no-reply@connect2.app>',
+      from: 'diogofabricio17@gmail.com',
       to: [opts.to],
       subject: opts.subject,
       html: opts.html
