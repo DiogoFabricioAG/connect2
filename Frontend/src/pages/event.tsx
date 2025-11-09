@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
 import { useLanguage } from '../lib/LanguageContext';
-import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, type Event as UiEvent } from '../lib/supabase';
+import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, getCurrentUser, importGuestsCsv, type Event as UiEvent } from '../lib/supabase';
 import { config } from '../config';
 
 // Interfaz UI de sala (simplificada para visual)
@@ -54,6 +54,10 @@ export function EventPage() {
   const [isListening, setIsListening] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState<string[]>([]);
   const [eventInfo, setEventInfo] = useState<UiEvent | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvResult, setCsvResult] = useState<{inserted: number; skipped: number} | null>(null);
+  const [csvError, setCsvError] = useState<string | null>(null);
 
   useEffect(() => {
     // Cargar salas existentes al montar el componente
@@ -63,6 +67,11 @@ export function EventPage() {
       if (!eventCode) return;
       const { data } = await getEventByCode(eventCode);
       if (data) setEventInfo(data);
+    })();
+    // Obtener usuario actual (para controles de organizador)
+    (async () => {
+      const { user } = await getCurrentUser();
+      setUserId(user?.id || null);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventCode]);
@@ -446,6 +455,31 @@ export function EventPage() {
     }
   };
 
+  const isOrganizer = !!(eventInfo?.organizer_id && userId && eventInfo.organizer_id === userId);
+
+  type CsvImportResponse = { inserted?: number; skipped?: number; guests?: unknown[] } | null;
+  async function handleCsvSelected(file: File) {
+    if (!eventCode) return;
+    setCsvBusy(true);
+    setCsvError(null);
+    setCsvResult(null);
+    try {
+      const text = await file.text();
+      const { data, error } = await importGuestsCsv(eventCode, text);
+      if (error) throw error;
+      const typed: CsvImportResponse = data as CsvImportResponse;
+      const inserted = typed?.inserted ?? 0;
+      const skipped = typed?.skipped ?? 0;
+      setCsvResult({ inserted, skipped });
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      console.error('CSV import error:', err);
+      setCsvError(err.message || 'Error al importar CSV');
+    } finally {
+      setCsvBusy(false);
+    }
+  }
+
   return (
     <div className="app-container">
       {/* Language Toggle */}
@@ -475,7 +509,11 @@ export function EventPage() {
         {/* Header del Evento */}
         <div className="event-header glass-effect">
           <div className="event-header-content">
-            <h1>🎉 {eventInfo?.name || eventCode} {eventInfo ? '' : `- ${language === 'es' ? 'Networking en Vivo' : 'Live Networking'}`}</h1>
+            {(() => {
+              const base = eventInfo?.name || eventCode;
+              const suffix = eventInfo ? '' : `- ${language === 'es' ? 'Networking en Vivo' : 'Live Networking'}`;
+              return <h1>🎉 {base} {suffix}</h1>;
+            })()}
             {eventInfo?.description && (
               <p className="event-description" style={{ margin: '0.25rem 0 0.5rem', color: 'var(--text-secondary)' }}>
                 {eventInfo.description}
@@ -484,11 +522,12 @@ export function EventPage() {
             <div className="event-meta-bar">
               <div className="event-status">
                 <span className="status-dot status-online"></span>
-                <span>
-                  {eventInfo?.status === 'published' ? (language === 'es' ? 'Publicado' : 'Published')
-                    : eventInfo?.status === 'completed' ? (language === 'es' ? 'Finalizado' : 'Completed')
-                    : (language === 'es' ? 'Borrador' : 'Draft')}
-                </span>
+                {(() => {
+                  let statusLabel = language === 'es' ? 'Borrador' : 'Draft';
+                  if (eventInfo?.status === 'published') statusLabel = language === 'es' ? 'Publicado' : 'Published';
+                  else if (eventInfo?.status === 'completed') statusLabel = language === 'es' ? 'Finalizado' : 'Completed';
+                  return <span>{statusLabel}</span>;
+                })()}
               </div>
               <div className="event-meta-extra" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                 <span title="Event code">🧾 {eventInfo?.code || eventCode}</span>
@@ -506,6 +545,37 @@ export function EventPage() {
         </div>
 
         <div className="container">
+          {/* Organizer-only: CSV Upload */}
+          {isOrganizer && (
+            <section className="glass-effect" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
+              <div className="section-header" style={{ marginBottom: '0.75rem' }}>
+                <h2>📥 {language === 'es' ? 'Importar Invitados (CSV)' : 'Import Guests (CSV)'}</h2>
+                <p style={{ color: 'var(--text-secondary)' }}>
+                  {language === 'es' ? 'Sube un CSV con columnas como name, first_name, last_name, email, tags, etc.' : 'Upload a CSV with columns like name, first_name, last_name, email, tags, etc.'}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  disabled={csvBusy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleCsvSelected(f);
+                  }}
+                />
+                {csvBusy && <span>⏳ {language === 'es' ? 'Importando...' : 'Importing...'}</span>}
+                {csvResult && (
+                  <span>
+                    ✅ {language === 'es' ? 'Insertados' : 'Inserted'}: {csvResult.inserted} · 💤 {language === 'es' ? 'Omitidos' : 'Skipped'}: {csvResult.skipped}
+                  </span>
+                )}
+                {csvError && (
+                  <span style={{ color: '#ef4444' }}>⚠️ {csvError}</span>
+                )}
+              </div>
+            </section>
+          )}
           {/* Room Banner - Shown when in a room */}
           {currentRoom && (
             <div className="glass-effect" style={{ 

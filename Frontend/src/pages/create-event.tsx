@@ -8,7 +8,7 @@ interface EventFormData {
   description: string;
   date: string;
   lumaId: string;
-  speakerInfo: string;
+    speakerInfo: string; // texto con comas: "ai, startups, salud"
 }
 
 // El código del evento ahora lo genera el backend (o se puede pasar opcionalmente)
@@ -51,6 +51,19 @@ export function CreateEventPage() {
       });
       
       if (createError) {
+
+            function buildPreferences(raw: string): Record<string, unknown> | null {
+              const trimmed = raw.trim();
+              if (!trimmed) return null;
+              const parts = trimmed.split(/[,;]\s*/).map(p => p.trim()).filter(Boolean);
+              if (!parts.length) return null;
+              return {
+                tags: parts,
+                raw,
+                source: 'speakerInfo'
+              };
+            }
+
         throw createError;
       }
 
@@ -205,15 +218,13 @@ export function CreateEventPage() {
             </div>
 
             <div className="form-section">
-              <h3>{language === 'es' ? 'Información del Ponente' : 'Speaker Information'}</h3>
-              
+              <h3>{language === 'es' ? 'Preferencias del Evento' : 'Event Preferences'}</h3>
               <div className="form-group">
-                <label>
-                  {language === 'es' ? 'Bio y Temas del Ponente' : 'Speaker Bio & Topics'}
+                <label>{language === 'es' ? 'Hashtags / Palabras Clave' : 'Hashtags / Keywords'}
                   <span className="label-hint">
                     {language === 'es'
-                      ? 'La IA usará esto para generar iniciadores de conversación relevantes'
-                      : 'AI will use this to generate relevant conversation starters'}
+                      ? 'Separadas por comas. Ej: ai, startups, salud, fintech'
+                      : 'Comma separated. E.g.: ai, startups, health, fintech'}
                   </span>
                 </label>
                 <textarea
@@ -222,8 +233,8 @@ export function CreateEventPage() {
                   onChange={handleChange}
                   rows={6}
                   placeholder={language === 'es'
-                    ? 'Ingresa la bio del ponente, temas y puntos clave de discusión...'
-                    : 'Enter speaker bio, topics, and key discussion points...'}
+                    ? 'Ej: ai, startups, salud, biotech, web3'
+                    : 'E.g.: ai, startups, health, biotech, web3'}
                   
                   disabled={loading}
                 />

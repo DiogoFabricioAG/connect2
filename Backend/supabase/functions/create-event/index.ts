@@ -8,7 +8,7 @@ declare const Deno: any;
 // Basic CORS headers for browser invocation
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, Authorization, apikey, Apikey, x-client-info, X-Client-Info, content-type, Content-Type',
+    'Access-Control-Allow-Headers': 'authorization, Authorization, apikey, Apikey, x-client-info, X-Client-Info, content-type, Content-Type, accept, Accept',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
 };
 
@@ -50,8 +50,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
             console.warn('[create-event] Unable to read organizer from token:', error_);
         }
 
-        // Insert event. Code may be null; trigger will auto-generate. Status defaults to draft if not provided.
-    const insertPayload: Record<string, unknown> = { title, description, preferences: preferences || {}, status: status || 'draft', organizer_id: organizerId };
+        // Insert event. Code may be null; trigger may auto-generate. Status defaults to draft if not provided.
+        const insertPayload: Record<string, unknown> = {
+            title,
+            description: description ?? null,
+            preferences: preferences || {},
+            status: status || 'draft',
+            organizer_id: organizerId || null
+        };
         if (code) insertPayload.code = code; // allow custom code if provided
 
         const { data: event, error: e1 } = await supabase

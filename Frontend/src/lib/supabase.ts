@@ -3,6 +3,18 @@ import { config } from '../config';
 
 export const supabase = createClient(config.supabase.url, config.supabase.anonKey);
 
+// Exponer para depuración en consola del navegador (solo desarrollo)
+// Permite ejecutar: supabase.auth.getUser() o supabase.from('events').select('*')
+interface DevGlobal {
+  supabase?: ReturnType<typeof createClient>;
+  __SUPABASE_CLIENT_ATTACHED?: boolean;
+}
+const g = globalThis as DevGlobal;
+if (!g.supabase) {
+  g.supabase = supabase as ReturnType<typeof createClient>;
+  g.__SUPABASE_CLIENT_ATTACHED = true;
+}
+
 // Database Types
 export interface SpeakerInfo {
   bio?: string;
@@ -23,6 +35,7 @@ export interface Event {
   created_at: string;
   updated_at: string;
   organizer_id?: string | null;
+  preferences?: Record<string, unknown> | null;
 }
 
 export interface GuestPreferences {
@@ -134,13 +147,14 @@ const mapRawEventToUI = (e: RawEvent): Event => {
     created_at: e.created_at,
     updated_at: e.created_at,
     organizer_id: e.organizer_id ?? null,
+    preferences: e.preferences ?? null,
   };
 };
 
 export const getEvents = async () => {
   const { data, error } = await supabase
     .from('events')
-    .select('id, code, title, description, status, created_at, organizer_id')
+    .select('id, code, title, description, status, created_at, organizer_id, preferences')
     .order('created_at', { ascending: true });
   const mapped = Array.isArray(data) ? data.map(mapRawEventToUI) : [];
   return { data: mapped, error };
@@ -151,46 +165,60 @@ export const getEventByCode = async (code: string) => {
   const normalized = code.trim().toLowerCase();
   const { data, error } = await supabase
     .from('events')
-    .select('id, code, title, description, status, created_at, organizer_id')
+    .select('id, code, title, description, status, created_at, organizer_id, preferences')
     .ilike('code', normalized)
     .single();
   return { data: data ? mapRawEventToUI(data as RawEvent) : null, error };
 };
 
+type EventInsert = {
+  title: string;
+  description?: string | null;
+  status: 'draft' | 'live';
+  code: string;
+  organizer_id?: string;
+};
+
 export const createEvent = async (eventData: Partial<Event>) => {
-  // Prefer using Edge Function to centralize logic & triggers
+  const { data: userRes } = await supabase.auth.getUser();
+  const organizer_id = userRes?.user?.id;
   const statusMap: Record<string, string> = { published: 'live', completed: 'ended' };
   const dbStatus = eventData.status ? (statusMap[eventData.status] || 'draft') : 'draft';
-  const payload = {
-    title: eventData.name as string,
-    description: eventData.description,
-    status: dbStatus,
-    code: eventData.code
-  };
-  try {
-    const { data, error } = await supabase.functions.invoke<{ event: RawEvent }>('create-event', { body: payload });
-    if (error) {
-      console.warn('[createEvent] Edge Function error, falling back to direct insert:', error.message);
-      // Fallback: generate code locally if missing
-      const fallbackCode = payload.code || (Math.random().toString(36).substring(2, 10));
-      const { data: direct, error: dbError } = await supabase
-        .from('events')
-        .insert({ title: payload.title, description: payload.description, status: dbStatus === 'live' ? 'live' : 'draft', code: fallbackCode })
-        .select('id, code, title, description, status, created_at')
-        .single();
-      return { data: direct ? mapRawEventToUI(direct as RawEvent) : null, error: dbError || error };
+  const payload = { title: eventData.name ?? '', description: eventData.description, status: dbStatus, code: eventData.code, preferences: eventData.preferences };
+
+  // Helper: Direct insert fallback
+  const directInsert = async () => {
+    const fallbackCode = payload.code || Math.random().toString(36).substring(2, 10);
+    const insertObj: EventInsert & { preferences?: Record<string, unknown> | null } = {
+      title: payload.title,
+      description: (payload.description ?? null),
+      status: dbStatus === 'live' ? 'live' : 'draft',
+      code: fallbackCode
+    };
+    if (payload.preferences) {
+      insertObj.preferences = payload.preferences;
     }
-    const event = data?.event;
-    return { data: event ? mapRawEventToUI(event) : null, error };
-  } catch (e) {
-    console.error('[createEvent] invoke failed, attempting direct insert fallback', e);
-    const fallbackCode = payload.code || (Math.random().toString(36).substring(2, 10));
+    if (organizer_id) {
+      insertObj.organizer_id = organizer_id;
+    }
     const { data: direct, error: dbError } = await supabase
       .from('events')
-      .insert({ title: payload.title, description: payload.description, status: dbStatus === 'live' ? 'live' : 'draft', code: fallbackCode })
-      .select('id, code, title, description, status, created_at')
+      .insert(insertObj)
+      .select('id, code, title, description, status, created_at, organizer_id, preferences')
       .single();
-    return { data: direct ? mapRawEventToUI(direct as RawEvent) : null, error: dbError }; 
+    return { data: direct ? mapRawEventToUI(direct as RawEvent) : null, error: direct ? null : dbError };
+  };
+
+  try {
+  const { data, error } = await supabase.functions.invoke<{ event: RawEvent }>('create-event', { body: payload });
+    if (error) {
+      console.warn('[createEvent] Edge Function error, using fallback:', error.message);
+      return await directInsert();
+    }
+    return { data: data?.event ? mapRawEventToUI(data.event) : null, error: null };
+  } catch (e) {
+    console.error('[createEvent] invoke failed, fallback to direct insert', e);
+    return await directInsert();
   }
 };
 

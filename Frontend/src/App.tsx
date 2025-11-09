@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { LanguageProvider } from './lib/LanguageContext';
 import { HomePage } from './pages/home';
 import { EventPage } from './pages/event';
+import { JoinEventPage } from './pages/join-event';
 import { CreateEventPage } from './pages/create-event';
 import { LoginPage } from './pages/login';
 import { EventsPage } from './pages/events';
@@ -17,6 +18,7 @@ function App() {
           <Route path="/events" element={<EventsPage />} />
           <Route path="/event/:eventCode" element={<EventPage />} />
           <Route path="/create-event" element={<CreateEventPage />} />
+          <Route path="/join/:eventCode" element={<JoinEventPage />} />
           <Route path="/organizer-signup" element={<OrganizerSignupPage />} />
         </Routes>
       </Router>
