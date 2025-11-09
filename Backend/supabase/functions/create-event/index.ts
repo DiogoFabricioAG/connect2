@@ -15,7 +15,7 @@ const corsHeaders = {
 Deno.serve(async (req: Request): Promise<Response> => {
     try {
             if (req.method === 'OPTIONS') {
-                return new Response('', { status: 204, headers: corsHeaders });
+                return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...corsHeaders, 'Access-Control-Max-Age': '86400', 'Content-Type': 'application/json' } });
             }
             if (req.method === 'GET') {
                 return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
