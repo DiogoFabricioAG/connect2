@@ -2,6 +2,8 @@
 // POST body: { event_id?: string, eventId?: string, event_code?: string, eventCode?: string, speaker?: string, audio_url?: string, audio_base64?: string, content_type?: string }
 // Si ELEVENLABS_API_KEY está presente, transcribe con ElevenLabs. Soporta audio_url o audio_base64.
 import { getServiceClient } from '../_shared/supabaseClient.ts'
+// @ts-ignore - Deno global in Edge runtime
+declare const Deno: any;
 
 async function sttFromBlob(blob: Blob, apiKey: string): Promise<string> {
     const sttUrl = Deno.env.get('ELEVENLABS_STT_URL') || 'https://api.elevenlabs.io/v1/speech-to-text'
@@ -27,10 +29,11 @@ async function sttFromBlob(blob: Blob, apiKey: string): Promise<string> {
 Deno.serve(async (req: Request) => {
     const cors = {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        'Access-Control-Allow-Headers': 'authorization, Authorization, apikey, Apikey, x-client-info, X-Client-Info, content-type, Content-Type, accept, Accept',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
     }
     if (req.method === 'OPTIONS') return new Response('', { status: 204, headers: cors })
+    if (req.method === 'GET') return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } })
     if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405, headers: cors })
     const { event_id, eventId, event_code, eventCode, speaker, audio_url, audio_base64, content_type } = await req.json()
     const supabase = getServiceClient()
@@ -55,7 +58,7 @@ Deno.serve(async (req: Request) => {
                 const buf = await audioResp.arrayBuffer()
                 transcript = await sttFromBlob(new Blob([buf], { type: ct }), elKey)
             } else if (audio_base64) {
-                const bytes = Uint8Array.from(atob(audio_base64), c => c.charCodeAt(0))
+                const bytes = Uint8Array.from(atob(audio_base64), c => c.codePointAt(0) || 0)
                 const ct = content_type || 'audio/mpeg'
                 transcript = await sttFromBlob(new Blob([bytes], { type: ct }), elKey)
             }

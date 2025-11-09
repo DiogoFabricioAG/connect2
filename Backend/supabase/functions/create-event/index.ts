@@ -8,16 +8,19 @@ declare const Deno: any;
 // Basic CORS headers for browser invocation
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Headers': 'authorization, Authorization, apikey, Apikey, x-client-info, X-Client-Info, content-type, Content-Type',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
 };
 
 Deno.serve(async (req: Request): Promise<Response> => {
     try {
-        if (req.method === 'OPTIONS') {
-            return new Response('ok', { headers: corsHeaders });
-        }
-        if (req.method !== 'POST') {
+            if (req.method === 'OPTIONS') {
+                return new Response('', { status: 204, headers: corsHeaders });
+            }
+            if (req.method === 'GET') {
+                return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            }
+            if (req.method !== 'POST') {
             return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
         }
 
@@ -29,8 +32,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
         const supabase = getServiceClient();
 
+        // Try to extract organizer user id from Authorization header (Bearer access token)
+        let organizerId: string | undefined;
+        try {
+            const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
+            if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+                const accessToken = authHeader.substring(7).trim();
+                // Minimal validation: decode JWT payload (base64url) to read 'sub'
+                const parts = accessToken.split('.');
+                if (parts.length === 3) {
+                    const payloadJson = atob(parts[1].replaceAll('-', '+').replaceAll('_', '/'));
+                    const payload = JSON.parse(payloadJson);
+                    if (typeof payload.sub === 'string') organizerId = payload.sub;
+                }
+            }
+        } catch (error_) {
+            console.warn('[create-event] Unable to read organizer from token:', error_);
+        }
+
         // Insert event. Code may be null; trigger will auto-generate. Status defaults to draft if not provided.
-        const insertPayload: Record<string, unknown> = { title, description, preferences: preferences || {}, status: status || 'draft' };
+    const insertPayload: Record<string, unknown> = { title, description, preferences: preferences || {}, status: status || 'draft', organizer_id: organizerId };
         if (code) insertPayload.code = code; // allow custom code if provided
 
         const { data: event, error: e1 } = await supabase

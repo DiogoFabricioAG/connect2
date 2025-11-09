@@ -22,6 +22,7 @@ export interface Event {
   status: 'draft' | 'published' | 'ongoing' | 'completed';
   created_at: string;
   updated_at: string;
+  organizer_id?: string | null;
 }
 
 export interface GuestPreferences {
@@ -110,6 +111,7 @@ type RawEvent = {
   status: string; // draft | live | ended
   preferences?: Record<string, unknown> | null;
   created_at: string;
+  organizer_id?: string | null;
 };
 
 const mapRawEventToUI = (e: RawEvent): Event => {
@@ -131,23 +133,26 @@ const mapRawEventToUI = (e: RawEvent): Event => {
     status: uiStatus,
     created_at: e.created_at,
     updated_at: e.created_at,
+    organizer_id: e.organizer_id ?? null,
   };
 };
 
 export const getEvents = async () => {
   const { data, error } = await supabase
     .from('events')
-    .select('id, code, title, description, status, created_at')
+    .select('id, code, title, description, status, created_at, organizer_id')
     .order('created_at', { ascending: true });
   const mapped = Array.isArray(data) ? data.map(mapRawEventToUI) : [];
   return { data: mapped, error };
 };
 
 export const getEventByCode = async (code: string) => {
+  // Codes are generated lowercase in DB; perform case-insensitive match to accept user variations
+  const normalized = code.trim().toLowerCase();
   const { data, error } = await supabase
     .from('events')
-    .select('id, code, title, description, status, created_at')
-    .eq('code', code)
+    .select('id, code, title, description, status, created_at, organizer_id')
+    .ilike('code', normalized)
     .single();
   return { data: data ? mapRawEventToUI(data as RawEvent) : null, error };
 };
@@ -162,9 +167,31 @@ export const createEvent = async (eventData: Partial<Event>) => {
     status: dbStatus,
     code: eventData.code
   };
-  const { data, error } = await supabase.functions.invoke<{ event: RawEvent }>('create-event', { body: payload });
-  const event = data?.event;
-  return { data: event ? mapRawEventToUI(event) : null, error };
+  try {
+    const { data, error } = await supabase.functions.invoke<{ event: RawEvent }>('create-event', { body: payload });
+    if (error) {
+      console.warn('[createEvent] Edge Function error, falling back to direct insert:', error.message);
+      // Fallback: generate code locally if missing
+      const fallbackCode = payload.code || (Math.random().toString(36).substring(2, 10));
+      const { data: direct, error: dbError } = await supabase
+        .from('events')
+        .insert({ title: payload.title, description: payload.description, status: dbStatus === 'live' ? 'live' : 'draft', code: fallbackCode })
+        .select('id, code, title, description, status, created_at')
+        .single();
+      return { data: direct ? mapRawEventToUI(direct as RawEvent) : null, error: dbError || error };
+    }
+    const event = data?.event;
+    return { data: event ? mapRawEventToUI(event) : null, error };
+  } catch (e) {
+    console.error('[createEvent] invoke failed, attempting direct insert fallback', e);
+    const fallbackCode = payload.code || (Math.random().toString(36).substring(2, 10));
+    const { data: direct, error: dbError } = await supabase
+      .from('events')
+      .insert({ title: payload.title, description: payload.description, status: dbStatus === 'live' ? 'live' : 'draft', code: fallbackCode })
+      .select('id, code, title, description, status, created_at')
+      .single();
+    return { data: direct ? mapRawEventToUI(direct as RawEvent) : null, error: dbError }; 
+  }
 };
 
 // Guest functions
@@ -234,3 +261,9 @@ export const speakText = async (text: string, voiceId?: string) => callEdgeFunct
 export const createVirtualPerson = async (ref: EventRef, displayName: string, personaProfile?: Record<string, unknown>) => callEdgeFunction<{ virtual_person: { id: string; display_name: string } }>('create-virtual-person', { ...ref, display_name: displayName, persona_profile: personaProfile });
 
 export const notifyGuest = async (email: string, eventCode: string, fullName?: string, extra?: Record<string, unknown>) => callEdgeFunction<{ mode: string; guest: Guest }>('notify-guest', { email, eventCode, full_name: fullName, extra });
+
+// CSV import (organizer-only)
+export const importGuestsCsv = async (eventCode: string, csv: string) => callEdgeFunction<{ inserted: number; skipped: number; guests: unknown[] }>('import-guests-csv', { eventCode, csv });
+
+// Public profile update for guests
+export const updateGuestProfile = async (eventCode: string, email: string, profile: Record<string, unknown> & { full_name?: string }) => callEdgeFunction<{ guest: Guest }>('update-guest-profile', { event_code: eventCode, email, ...profile });

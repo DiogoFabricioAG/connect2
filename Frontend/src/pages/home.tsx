@@ -3,17 +3,38 @@ import { useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
 import { useLanguage } from '../lib/LanguageContext';
 import { translations } from '../lib/i18n';
+import { getEventByCode } from '../lib/supabase';
 
 export function HomePage() {
   const { language, toggleLanguage } = useLanguage();
   const t = translations[language];
   const [eventCode, setEventCode] = useState('');
   const [userType, setUserType] = useState<'guest' | 'organizer'>('guest');
+  const [checking, setChecking] = useState(false);
+  const [codeError, setCodeError] = useState('');
   const navigate = useNavigate();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    navigate(`/event/${eventCode}`);
+    const code = eventCode.trim().toUpperCase();
+    if (!code) return;
+    setChecking(true);
+    setCodeError('');
+    try {
+      const { data, error } = await getEventByCode(code);
+      if (error) {
+        console.error('Error fetching event by code', error);
+        setCodeError(language === 'es' ? 'Error buscando el evento' : 'Error looking up event');
+        return;
+      }
+      if (!data) {
+        setCodeError(language === 'es' ? 'Código no válido o evento inexistente' : 'Invalid code or event not found');
+        return;
+      }
+      navigate(`/event/${code}`);
+    } finally {
+      setChecking(false);
+    }
   };
 
   return (
@@ -103,11 +124,16 @@ export function HomePage() {
                     placeholder={language === 'es' ? 'Ej: TECH2025' : 'Ex: TECH2025'}
                     className="input-large"
                   />
-                  <button type="submit" className="btn btn-primary btn-xl">
-                    {language === 'es' ? 'Unirse →' : 'Join →'}
+                  <button type="submit" className="btn btn-primary btn-xl" disabled={checking}>
+                    {checking ? (language === 'es' ? 'Verificando...' : 'Checking...') : (language === 'es' ? 'Unirse →' : 'Join →')}
                   </button>
                 </div>
               </form>
+              {codeError && (
+                <div className="error-message" style={{ marginTop: '0.75rem' }}>
+                  ⚠️ {codeError}
+                </div>
+              )}
               <p className="form-help-text">
                 {language === 'es' 
                   ? '¿No tienes cuenta? Primero ' 

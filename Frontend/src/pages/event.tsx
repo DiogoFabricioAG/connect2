@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
 import { useLanguage } from '../lib/LanguageContext';
-import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge } from '../lib/supabase';
+import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, type Event as UiEvent } from '../lib/supabase';
 import { config } from '../config';
 
 // Interfaz UI de sala (simplificada para visual)
@@ -53,10 +53,17 @@ export function EventPage() {
   const [currentRoom, setCurrentRoom] = useState<UiRoom | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState<string[]>([]);
+  const [eventInfo, setEventInfo] = useState<UiEvent | null>(null);
 
   useEffect(() => {
     // Cargar salas existentes al montar el componente
     fetchRooms();
+    // Cargar info del evento
+    (async () => {
+      if (!eventCode) return;
+      const { data } = await getEventByCode(eventCode);
+      if (data) setEventInfo(data);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventCode]);
 
@@ -102,11 +109,14 @@ export function EventPage() {
       if (error) throw error;
       setMatchFound(!!data?.found);
       if (data?.found && data?.guest) {
-        const g: any = data.guest as any;
+        const guestObj = data.guest as unknown as { full_name?: string; name?: string; interests?: unknown };
+        const interestsArr = Array.isArray(guestObj.interests)
+          ? guestObj.interests.filter((i): i is string => typeof i === 'string')
+          : ['Networking', 'Tech'];
         setMatchedPerson({
           number,
-          name: g.full_name || g.name || `Person #${number}`,
-          interests: Array.isArray(g.interests) ? g.interests : ['Networking', 'Tech'],
+          name: guestObj.full_name || guestObj.name || `Person #${number}`,
+          interests: interestsArr,
           matched: true
         });
         // Generar preguntas automáticamente (sin contexto específico por ahora)
@@ -465,11 +475,28 @@ export function EventPage() {
         {/* Header del Evento */}
         <div className="event-header glass-effect">
           <div className="event-header-content">
-            <h1>🎉 {eventCode} - {language === 'es' ? 'Networking en Vivo' : 'Live Networking'}</h1>
+            <h1>🎉 {eventInfo?.name || eventCode} {eventInfo ? '' : `- ${language === 'es' ? 'Networking en Vivo' : 'Live Networking'}`}</h1>
+            {eventInfo?.description && (
+              <p className="event-description" style={{ margin: '0.25rem 0 0.5rem', color: 'var(--text-secondary)' }}>
+                {eventInfo.description}
+              </p>
+            )}
             <div className="event-meta-bar">
               <div className="event-status">
                 <span className="status-dot status-online"></span>
-                <span>{language === 'es' ? 'En Vivo Ahora' : 'Live Now'}</span>
+                <span>
+                  {eventInfo?.status === 'published' ? (language === 'es' ? 'Publicado' : 'Published')
+                    : eventInfo?.status === 'completed' ? (language === 'es' ? 'Finalizado' : 'Completed')
+                    : (language === 'es' ? 'Borrador' : 'Draft')}
+                </span>
+              </div>
+              <div className="event-meta-extra" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                <span title="Event code">🧾 {eventInfo?.code || eventCode}</span>
+                {eventInfo?.date && (
+                  <span title="Created at">
+                    📅 {new Date(eventInfo.date).toLocaleString(language === 'es' ? 'es-ES' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                  </span>
+                )}
               </div>
               <button onClick={createVirtualPerson} className="btn btn-glass">
                 <span>🤖</span> {language === 'es' ? 'Asistente Virtual' : 'Virtual Assistant'}
