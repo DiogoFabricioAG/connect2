@@ -147,10 +147,14 @@ async function simpleGenerate(baseText: string, limit: number): Promise<string[]
 
 Deno.serve(async (req: Request) => {
     const cors = {
+        // Allow local dev and general usage. If you prefer to restrict, replace * with your origin.
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS'
-    }
+        // Supabase-js sends these headers; include them to satisfy preflight.
+        'Access-Control-Allow-Headers': 'content-type, authorization, apikey, x-client-info, x-supabase-authorization',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        // Explicitly allow credentials off by default (no cookies). Toggle to 'true' if needed.
+        'Access-Control-Allow-Credentials': 'false'
+    } as Record<string, string>
     if (req.method === 'OPTIONS') return new Response('', { status: 204, headers: cors })
     if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405, headers: cors })
     const body = await req.json()

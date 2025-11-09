@@ -292,7 +292,7 @@ export const createVirtualPerson = async (ref: EventRef, displayName: string, pe
 export const notifyGuest = async (email: string, eventCode: string, fullName?: string, extra?: Record<string, unknown>) => callEdgeFunction<{ mode: string; guest: Guest }>('notify-guest', { email, eventCode, full_name: fullName, extra });
 
 // CSV import (organizer-only)
-export const importGuestsCsv = async (eventCode: string, csv: string) => callEdgeFunction<{ inserted: number; skipped: number; guests: unknown[] }>('import-guests-csv', { eventCode, csv });
+export const importGuestsCsv = async (ref: EventRef, csv: string) => callEdgeFunction<{ inserted: number; skipped: number; guests: unknown[]; emails_sent?: number }>('import-guests-csv', { ...ref, csv });
 
 // Public profile update for guests
 export const updateGuestProfile = async (eventCode: string, email: string, profile: Record<string, unknown> & { full_name?: string }) => callEdgeFunction<{ guest: Guest }>('update-guest-profile', { event_code: eventCode, email, ...profile });

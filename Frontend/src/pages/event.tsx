@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
 import { useLanguage } from '../lib/LanguageContext';
-import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, getCurrentUser, importGuestsCsv, startEvent as startEventEdge, supabase as sbClient, type Event as UiEvent } from '../lib/supabase';
+import { speakText as speakTextEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, getCurrentUser, importGuestsCsv, startEvent as startEventEdge, supabase as sbClient, type Event as UiEvent } from '../lib/supabase';
 import { config } from '../config';
 
 // Interfaz UI de sala (simplificada para visual)
@@ -27,12 +27,6 @@ interface Badge {
   matched: boolean;
 }
 
-interface VirtualPerson {
-  id: string;
-  name: string;
-  avatar: string;
-  greeting: string;
-}
 
 export function EventPage() {
   const { eventCode } = useParams();
@@ -46,17 +40,24 @@ export function EventPage() {
   const [transcription, setTranscription] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [myBadgeNumber] = useState(42); // Usuario de prueba
-  const [virtualPerson, setVirtualPerson] = useState<VirtualPerson | null>(null);
-  const [showVirtualAssistant, setShowVirtualAssistant] = useState(false);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
   const [activeTab, setActiveTab] = useState<'search' | 'rooms' | 'questions'>('search');
   const [currentRoom, setCurrentRoom] = useState<UiRoom | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState<string[]>([]);
+  // Fullscreen Questions Overlay
+  const [showQsOverlay, setShowQsOverlay] = useState(false);
+  const [qsClickCount, setQsClickCount] = useState(0);
+  const [overlayInfo, setOverlayInfo] = useState<string | null>(null);
+  const [overlayLastQuestion, setOverlayLastQuestion] = useState<Question | null>(null);
+  // Queue for prefetching questions in batches
+  const [qsQueue, setQsQueue] = useState<Question[]>([]);
+  const [qsPrefetching, setQsPrefetching] = useState(false);
   const [eventInfo, setEventInfo] = useState<UiEvent | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [csvBusy, setCsvBusy] = useState(false);
-  const [csvResult, setCsvResult] = useState<{inserted: number; skipped: number} | null>(null);
+  interface CsvResultState { inserted: number; skipped: number; emails_sent?: number; emails_attempted?: number; emails_failed?: number; email_warning?: string }
+  const [csvResult, setCsvResult] = useState<CsvResultState | null>(null);
   const [csvError, setCsvError] = useState<string | null>(null);
   const [startingEvent, setStartingEvent] = useState(false);
   const [startMsg, setStartMsg] = useState<string | null>(null);
@@ -83,38 +84,63 @@ export function EventPage() {
   }, [eventCode]);
 
   const fetchRooms = async () => {
-    if (!eventCode) return;
+    // Mostrar salas creadas para el evento y sus participantes por número de fotocheck
+    if (!eventInfo?.id) return;
     try {
-      const { data, error } = await generateRoomsEdge({ eventCode }, 5);
-      if (error) throw error;
-  const rawRooms = Array.isArray(data?.rooms) ? (data?.rooms as unknown[]) : [];
-  const uiRooms: UiRoom[] = rawRooms.map((r, idx) => formatRoom(r as Record<string, unknown>, idx));
+      // 1) Salas del evento
+      const { data: roomsRes, error: roomsErr } = await sbClient
+        .from('rooms')
+        .select('id, name, topic')
+        .eq('event_id', eventInfo.id);
+      if (roomsErr) throw roomsErr;
+      const roomList = (roomsRes as Array<{ id: string; name?: string; topic?: string }> | null) || [];
+      if (roomList.length === 0) { setRooms([]); return; }
+
+      const roomIds = roomList.map(r => r.id);
+
+      // 2) Relaciones room-participants
+      const { data: rels, error: relsErr } = await sbClient
+        .from('room_participants')
+        .select('room_id, guest_id')
+        .in('room_id', roomIds);
+      if (relsErr) throw relsErr;
+      const relsTyped = (rels as Array<{ room_id: string; guest_id: string }> | null) || [];
+      const guestIds = Array.from(new Set(relsTyped.map(r => r.guest_id)));
+
+      // 3) Invitados con sus números
+  const guestMap = new Map<string, number | null>();
+      if (guestIds.length > 0) {
+        const { data: guests, error: guestsErr } = await sbClient
+          .from('guests')
+          .select('id, badge_number')
+          .in('id', guestIds);
+        if (guestsErr) throw guestsErr;
+        const guestsTyped = (guests as Array<{ id: string; badge_number: number | null }> | null) || [];
+        guestsTyped.forEach(g => guestMap.set(g.id, typeof g.badge_number === 'number' ? g.badge_number : null));
+      }
+
+      // 4) Construir UI
+      const uiRooms: UiRoom[] = roomList.map((r, idx) => {
+        const participantsIds = relsTyped.filter(rel => rel.room_id === r.id).map(rel => rel.guest_id);
+        const formatted = participantsIds.map(pid => {
+          const n = guestMap.get(pid);
+          return typeof n === 'number' ? `n°${n}` : 's/n';
+        });
+        return {
+          id: r.id,
+          name: r.name || `Sala ${idx + 1}`,
+          topic: r.topic || 'General',
+          participants: formatted,
+          conversationTopics: []
+        };
+      });
       setRooms(uiRooms);
     } catch (error) {
       console.error('Error fetching rooms:', error);
     }
   };
 
-  function formatRoom(roomObj: Record<string, unknown>, idx: number): UiRoom {
-  const topicsSource = roomObj.conversation_topics ?? roomObj.topics;
-    let conversationTopics: string[] = [];
-    if (Array.isArray(topicsSource)) {
-      conversationTopics = topicsSource.filter((t): t is string => typeof t === 'string');
-    } else if (typeof topicsSource === 'string') {
-      conversationTopics = topicsSource.split(',').map(t => t.trim()).filter(Boolean);
-    }
-    const participantsRaw = roomObj.participants;
-    const participants = Array.isArray(participantsRaw)
-      ? participantsRaw.filter((p): p is string => typeof p === 'string')
-      : [];
-    return {
-      id: (roomObj.id as string) || (roomObj.room_id as string) || `room-${idx}`,
-      name: (roomObj.name as string) || (roomObj.title as string) || `Room ${idx + 1}`,
-      topic: (roomObj.topic as string) || (roomObj.main_topic as string) || (roomObj.theme as string) || 'General',
-      participants,
-      conversationTopics
-    };
-  }
+  // formatRoom eliminado: la construcción de salas ahora sucede en fetchRooms desde la BD persistida
 
   const handleSearchGuest = async () => {
     try {
@@ -142,36 +168,7 @@ export function EventPage() {
     }
   };
 
-  const generateRooms = async () => {
-    try {
-      if (!eventCode) return;
-      const { data, error } = await generateRoomsEdge({ eventCode }, 5);
-      if (error) throw error;
-      const rawRooms = data?.rooms || [];
-      const uiRooms: UiRoom[] = rawRooms.map((r: unknown, idx: number) => {
-        const roomObj = r as Record<string, unknown>;
-        const topicsSource = roomObj.conversation_topics || roomObj.topics;
-        let conversationTopics: string[] = [];
-        if (Array.isArray(topicsSource)) {
-          conversationTopics = topicsSource.filter((t: unknown): t is string => typeof t === 'string');
-        } else if (typeof topicsSource === 'string') {
-          conversationTopics = topicsSource.split(',').map((t) => t.trim()).filter(Boolean);
-        }
-        return {
-          id: (roomObj.id as string) || (roomObj.room_id as string) || `room-${idx}`,
-          name: (roomObj.name as string) || (roomObj.title as string) || `Room ${idx + 1}`,
-          topic: (roomObj.topic as string) || (roomObj.main_topic as string) || (roomObj.theme as string) || 'General',
-          participants: Array.isArray(roomObj.participants)
-            ? (roomObj.participants as unknown[]).filter((p: unknown): p is string => typeof p === 'string')
-            : [],
-          conversationTopics
-        };
-      });
-      setRooms(uiRooms);
-    } catch (error) {
-      console.error('Error generating rooms:', error);
-    }
-  };
+  // generateRooms (Edge) eliminado: usamos fetchRooms para mostrar salas reales
 
   // Fetch other participants in the same room as a given guestId (top-level helper)
   async function fetchRoomMatesForGuest(guestId: string) {
@@ -263,18 +260,26 @@ export function EventPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, eventInfo?.id, myBadgeNumber]);
 
-  // Virtual assistant creator (simplified, no nested hooks)
-  function createVirtualPerson() {
-    try {
-      const greeting = language === 'es'
-        ? '¡Hola! Soy Alex, tu asistente virtual. Estoy aquí para ayudarte a conectar con las personas ideales en este evento. ¿En qué puedo ayudarte?'
-        : 'Hello! I\'m Alex, your virtual assistant. I\'m here to help you connect with the right people at this event. How can I help you?';
-      setVirtualPerson({ id: '1', name: 'Alex AI', avatar: '🤖', greeting });
-      setShowVirtualAssistant(true);
-    } catch (error) {
-      console.error('Error creating virtual person:', error);
+  // Auto open fullscreen Questions overlay and start transcription when entering Questions tab
+  useEffect(() => {
+    if (activeTab === 'questions') {
+      setShowQsOverlay(true);
+      setOverlayInfo(language === 'es' ? '🎤 Transcripción activada. Toca la pantalla para generar una pregunta.' : '🎤 Transcription enabled. Tap anywhere to generate a question.');
+      // Intentar activar micrófono automáticamente (puede requerir gesto del usuario según navegador)
+      setTimeout(() => {
+        try { startLiveTranscription(); } catch { /* no-op */ }
+      }, 150);
+      // Prefetch first batch so the first tap is instant
+      prefetchQuestionsBatch(5).catch(() => {});
+    } else {
+      setShowQsOverlay(false);
+      setOverlayInfo(null);
+      setQsQueue([]);
+      setQsPrefetching(false);
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
 
   const startRecording = async () => {
     setIsRecording(true);
@@ -301,11 +306,124 @@ export function EventPage() {
       // La función devuelve { questions: rows } con campo 'content'
   interface RawQuestion { id: string; content: string; context?: { source?: string }; }
   const mapped = (data?.questions || []).map((q: RawQuestion) => ({ id: q.id, text: q.content, category: q.context?.source || 'AI' }));
-      setQuestions(mapped);
+      if (mapped.length === 0) {
+        setQuestions(buildSeedQuestions(12));
+      } else {
+        setQuestions(mapped);
+      }
     } catch (error) {
       console.error('Error generating questions:', error);
+      // Fallback: sembrar preguntas por defecto para simular la interacción
+      setQuestions(buildSeedQuestions(12));
     } finally {
       setGeneratingQuestions(false);
+    }
+  };
+
+  // Preguntas semilla por defecto (bilingües) para simular interacción cuando el backend no responde
+  function buildSeedQuestions(count = 12): Question[] {
+    const topic = currentRoom?.topic || (language === 'es' ? 'Networking' : 'Networking');
+    const seedsEs = [
+      `¿Qué te trajo hoy a este evento?`,
+      `¿Qué proyecto te emociona ahora mismo?`,
+      `¿En qué estás trabajando últimamente?`,
+      `¿Qué tendencia te intriga más en ${topic}?`,
+      `¿Cuál fue un aprendizaje reciente que te sorprendió?`,
+      `¿Qué desafío estás intentando resolver este mes?`,
+      `Si pudieras colaborar con alguien aquí, ¿en qué sería?`,
+      `¿Qué herramienta o idea te ha ahorrado tiempo últimamente?`,
+      `¿Qué te gustaría explorar más después de este evento?`,
+      `¿Qué te motivó a unirte a esta sala?`,
+      `¿Qué te gustaría enseñar o compartir hoy?`,
+      `¿Qué búsqueda o pregunta abierta tienes ahora mismo?`
+    ];
+    const seedsEn = [
+      `What brought you to this event today?`,
+      `What project excites you right now?`,
+      `What have you been working on lately?`,
+      `Which trend intrigues you most in ${topic}?`,
+      `What recent learning surprised you?`,
+      `What challenge are you trying to solve this month?`,
+      `If you could collaborate with someone here, on what would it be?`,
+      `What tool or idea saved you time recently?`,
+      `What would you like to explore more after this event?`,
+      `What motivated you to join this room?`,
+      `What would you like to teach or share today?`,
+      `What open question are you exploring right now?`
+    ];
+    const base = language === 'es' ? seedsEs : seedsEn;
+    const out: Question[] = [];
+    for (let i = 0; i < Math.max(count, base.length); i++) {
+      const text = base[i % base.length];
+      out.push({ id: `seed-${Date.now()}-${i}`, text, category: '🤖 AI' } as Question);
+    }
+    return out.slice(0, count);
+  }
+
+  // Helper: prefetch a batch of questions into queue
+  const prefetchQuestionsBatch = async (count = 5) => {
+    if (!eventCode || qsPrefetching) return;
+    setQsPrefetching(true);
+    try {
+      const lastLines = liveTranscript.slice(-3).map(l => l.split('] ')[1] || l).join(' ');
+      const context = [
+        'ROL: Facilitador de networking. Genera preguntas breves y abiertas para romper el hielo.',
+        'TONO: cercano, curioso y positivo. Evita clichés.',
+        'REGLAS: ≤ 18 palabras, sin repetir preguntas. Evita: ¿Qué opinas? ¿Cómo estás? ¿A qué te dedicas?'
+      ,
+        `Tema de sala: ${currentRoom?.topic || 'General'}`,
+        `Último fragmento transcrito: "${lastLines || (transcription || '').slice(-160)}"`
+      ].join('\n');
+      const { data, error } = await generateQuestionsEdge({ eventCode }, currentRoom?.id, count, context);
+      if (error) throw error;
+      const arr = (data?.questions || []) as Array<{ id: string; content: string; context?: { source?: string } }>;
+      if (arr.length > 0) {
+        const batch: Question[] = arr.map(q => ({ id: q.id, text: q.content, category: q.context?.source || '🤖 AI' } as Question));
+        setQsQueue(prev => [...prev, ...batch]);
+      } else {
+        // Sin resultados: usar semillas para simular
+        setQsQueue(prev => [...prev, ...buildSeedQuestions(count)]);
+      }
+    } catch {
+      // Error llamando al backend: también usar semillas
+      setQsQueue(prev => [...prev, ...buildSeedQuestions(count)]);
+    } finally {
+      setQsPrefetching(false);
+    }
+  };
+
+  // On each tap: consume one from the queue; if low, prefetch in background
+  const generateOneQuestionOnClick = async () => {
+    try {
+      // If queue is empty, prefetch and then use first
+      if (qsQueue.length === 0) {
+        await prefetchQuestionsBatch(5);
+      }
+      const next = qsQueue[0];
+      if (next) {
+        // consume one
+        setQsQueue(prev => prev.slice(1));
+        setOverlayLastQuestion(next);
+        setQuestions(prev => [next, ...prev]);
+        setQsClickCount(prev => prev + 1);
+        // top up when running low
+        if (!qsPrefetching && qsQueue.length - 1 < 2) {
+          prefetchQuestionsBatch(5).catch(() => {});
+        }
+      } else {
+        // Still nothing? fallback
+        const fallback: Question = { id: `fallback-${Date.now()}`, text: language === 'es' ? '¿Qué proyecto te emociona ahora mismo?' : 'What project excites you right now?', category: '🤖 AI' };
+        setOverlayLastQuestion(fallback);
+        setQuestions(prev => [fallback, ...prev]);
+        setQsClickCount(prev => prev + 1);
+      }
+      setOverlayInfo(null);
+    } catch (e) {
+      console.error('generateOneQuestionOnClick error:', e);
+      const fallback: Question = { id: `err-${Date.now()}`, text: language === 'es' ? 'Cuéntame algo que hayas aprendido esta semana.' : 'Tell me something you learned this week.', category: '🤖 AI' };
+      setOverlayLastQuestion(fallback);
+      setQuestions(prev => [fallback, ...prev]);
+      setQsClickCount(prev => prev + 1);
     }
   };
 
@@ -548,7 +666,7 @@ export function EventPage() {
 
   const isOrganizer = !!(eventInfo?.organizer_id && userId && eventInfo.organizer_id === userId);
 
-  type CsvImportResponse = { inserted?: number; skipped?: number; guests?: unknown[] } | null;
+  type CsvImportResponse = { inserted?: number; skipped?: number; guests?: unknown[]; emails_sent?: number; emails_attempted?: number; emails_failed?: number; email_warning?: string } | null;
   async function handleCsvSelected(file: File) {
     if (!eventCode) return;
     setCsvBusy(true);
@@ -556,12 +674,16 @@ export function EventPage() {
     setCsvResult(null);
     try {
       const text = await file.text();
-      const { data, error } = await importGuestsCsv(eventCode, text);
+  const { data, error } = await importGuestsCsv({ eventCode, eventId: eventInfo?.id }, text);
       if (error) throw error;
-      const typed: CsvImportResponse = data as CsvImportResponse;
-      const inserted = typed?.inserted ?? 0;
-      const skipped = typed?.skipped ?? 0;
-      setCsvResult({ inserted, skipped });
+  const typed: CsvImportResponse = data as CsvImportResponse;
+  const inserted = typed?.inserted ?? 0;
+  const skipped = typed?.skipped ?? 0;
+  const emailsSent = typed?.emails_sent ?? undefined;
+  const emailsAttempted = typed?.emails_attempted ?? undefined;
+  const emailsFailed = typed?.emails_failed ?? undefined;
+  const emailWarning = typed?.email_warning;
+  setCsvResult({ inserted, skipped, emails_sent: emailsSent, emails_attempted: emailsAttempted, emails_failed: emailsFailed, email_warning: emailWarning });
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
       console.error('CSV import error:', err);
@@ -655,9 +777,6 @@ export function EventPage() {
                   </span>
                 )}
               </div>
-              <button onClick={createVirtualPerson} className="btn btn-glass">
-                <span>🤖</span> {language === 'es' ? 'Asistente Virtual' : 'Virtual Assistant'}
-              </button>
             </div>
           </div>
         </div>
@@ -686,6 +805,18 @@ export function EventPage() {
                 {csvResult && (
                   <span>
                     ✅ {language === 'es' ? 'Insertados' : 'Inserted'}: {csvResult.inserted} · 💤 {language === 'es' ? 'Omitidos' : 'Skipped'}: {csvResult.skipped}
+                    {typeof csvResult.emails_sent === 'number' && (
+                      <> · ✉️ {language === 'es' ? 'Enviados' : 'Sent'}: {csvResult.emails_sent}</>
+                    )}
+                    {typeof csvResult.emails_attempted === 'number' && (
+                      <> · 📤 {language === 'es' ? 'Intentados' : 'Attempted'}: {csvResult.emails_attempted}</>
+                    )}
+                    {typeof csvResult.emails_failed === 'number' && csvResult.emails_failed > 0 && (
+                      <> · ⚠️ {language === 'es' ? 'Fallidos' : 'Failed'}: {csvResult.emails_failed}</>
+                    )}
+                    {csvResult.email_warning && (
+                      <> · ⚠️ {csvResult.email_warning}</>
+                    )}
                   </span>
                 )}
                 {csvError && (
@@ -763,7 +894,7 @@ export function EventPage() {
             </button>
             <button 
               className={`tab-btn ${activeTab === 'rooms' ? 'active' : ''}`}
-              onClick={() => { setActiveTab('rooms'); generateRooms(); }}
+              onClick={() => { setActiveTab('rooms'); fetchRooms(); }}
             >
               🚪 {language === 'es' ? 'Salas de Networking' : 'Networking Rooms'}
             </button>
@@ -908,7 +1039,7 @@ export function EventPage() {
                         : 'Generating optimal networking rooms based on attendee profiles'}</p>
                     </div>
                   ) : (
-                    rooms.map((room) => (
+                    rooms.map((room, idx) => (
                       <div key={room.id} className="room-card glass-effect card-hover">
                         <div className="room-header">
                           <h3>{room.name}</h3>
@@ -917,6 +1048,11 @@ export function EventPage() {
                           </span>
                         </div>
                         <div className="room-body">
+                          <p style={{ margin: '0 0 0.5rem 0', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                            {language === 'es'
+                              ? `Sala ${idx + 1} -> ${room.participants.join(', ')} hablando de ${room.topic}`
+                              : `Room ${idx + 1} -> ${room.participants.join(', ')} discussing ${room.topic}`}
+                          </p>
                           <p className="room-topic">
                             <strong>{language === 'es' ? 'Tema Principal:' : 'Main Topic:'}</strong> {room.topic}
                           </p>
@@ -976,6 +1112,38 @@ export function EventPage() {
           {/* Tab: Conversation Starters */}
           {activeTab === 'questions' && (
             <section className="tab-content">
+              {/* Fullscreen Overlay for rapid-fire questions */}
+              {showQsOverlay && (
+                <div
+                  onClick={generateOneQuestionOnClick}
+                  style={{
+                    position: 'fixed', inset: 0, zIndex: 9999,
+                    background: 'rgba(10,10,14,0.96)', color: 'white',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    textAlign: 'center', padding: '2rem', cursor: 'pointer'
+                  }}
+                >
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowQsOverlay(false); }}
+                    className="btn btn-outline"
+                    style={{ position: 'absolute', top: 16, right: 16 }}
+                    aria-label={language === 'es' ? 'Cerrar' : 'Close'}
+                  >
+                    ✕
+                  </button>
+                  <div style={{ maxWidth: 900 }}>
+                    <div style={{ opacity: 0.85, marginBottom: '1rem', fontSize: '0.95rem' }}>
+                      {overlayInfo || (language === 'es' ? 'Toca para generar una nueva pregunta' : 'Tap to generate a new question')}
+                    </div>
+                    <div style={{ fontSize: '2rem', lineHeight: 1.3, fontWeight: 700 }}>
+                      {overlayLastQuestion?.text || (language === 'es' ? '¡Listo para romper el hielo! Toca para la primera pregunta.' : 'Ready to break the ice! Tap for the first question.')}
+                    </div>
+                    <div style={{ opacity: 0.7, marginTop: '1rem', fontSize: '0.9rem' }}>
+                      {language === 'es' ? `Preguntas generadas: ${qsClickCount}` : `Questions generated: ${qsClickCount}`}
+                    </div>
+                  </div>
+                </div>
+              )}
               {/* Live Transcription - Only in room */}
               {currentRoom && (
                 <div className="glass-effect" style={{ 
@@ -1198,46 +1366,6 @@ export function EventPage() {
             </section>
           )}
 
-          {/* Virtual Assistant Modal */}
-          {showVirtualAssistant && virtualPerson && (
-            <div
-              className="modal-overlay"
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') setShowVirtualAssistant(false) }}
-              onClick={() => setShowVirtualAssistant(false)}
-            >
-              <div
-                className="modal glass-effect"
-                role="dialog"
-                aria-modal="true"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="modal-header">
-                  <h2>{language === 'es' ? 'Asistente Virtual' : 'Virtual Assistant'}</h2>
-                  <button 
-                    className="modal-close"
-                    onClick={() => setShowVirtualAssistant(false)}
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="modal-body">
-                  <div className="virtual-person">
-                    <div className="avatar-large">{virtualPerson.avatar}</div>
-                    <h3>{virtualPerson.name}</h3>
-                    <p>{virtualPerson.greeting}</p>
-                    <button 
-                      onClick={() => speakText(virtualPerson.greeting)}
-                      className="btn btn-primary"
-                    >
-                      🔊 {language === 'es' ? 'Escuchar Saludo' : 'Hear Greeting'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>
