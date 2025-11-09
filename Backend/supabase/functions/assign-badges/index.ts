@@ -6,10 +6,15 @@ import { getServiceClient } from '../_shared/supabaseClient.ts'
 Deno.serve(async (req) => {
     const cors = {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        'Access-Control-Allow-Headers': 'authorization, Authorization, apikey, Apikey, x-client-info, X-Client-Info, content-type, Content-Type, accept, Accept',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
     }
-    if (req.method === 'OPTIONS') return new Response('', { status: 204, headers: cors })
+    // Preflight with 200 JSON and cache
+    if (req.method === 'OPTIONS') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...cors, 'Access-Control-Max-Age': '86400', 'Content-Type': 'application/json' } })
+    }
+    // Healthcheck
+    if (req.method === 'GET') return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } })
     if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405, headers: cors })
 
     const body = await req.json()

@@ -10,7 +10,7 @@ declare const Deno: any;
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, Authorization, apikey, Apikey, x-client-info, X-Client-Info, content-type, Content-Type, accept, Accept',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS'
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
 };
 
 interface ParsedRow {
@@ -76,7 +76,14 @@ function getUserIdFromAuth(req: Request): string | undefined {
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('', { status: 204, headers: cors });
+  // Handle CORS preflight explicitly with 200 JSON and a max-age so browsers can cache it
+  if (req.method === 'OPTIONS') {
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { ...cors, 'Access-Control-Max-Age': '86400', 'Content-Type': 'application/json' }
+    });
+  }
+  // Simple healthcheck
   if (req.method === 'GET') return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } });
   if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405, headers: cors });
   try {

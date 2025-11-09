@@ -273,6 +273,7 @@ export const callEdgeFunction = async <T = unknown>(functionName: string, payloa
 
 // Specific Edge Function wrappers
 export const assignBadges = async (eventId: string) => callEdgeFunction<{ assigned: number }>('assign-badges', { eventId });
+export const startEvent = async (eventId: string, minRoomSize = 2, maxRoomSize = 6) => callEdgeFunction<{ assigned_badges: number; rooms_created: number; pairs_created: number }>('start-event', { eventId, min_room_size: minRoomSize, max_room_size: maxRoomSize });
 
 type EventRef = { eventId?: string; eventCode?: string };
 

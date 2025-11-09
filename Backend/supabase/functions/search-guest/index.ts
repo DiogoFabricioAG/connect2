@@ -5,17 +5,20 @@ import { getServiceClient } from '../_shared/supabaseClient.ts'
 Deno.serve(async (req: Request) => {
     const cors = {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        'Access-Control-Allow-Headers': 'authorization, Authorization, apikey, Apikey, x-client-info, X-Client-Info, content-type, Content-Type, accept, Accept',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
     }
-    if (req.method === 'OPTIONS') return new Response('', { status: 204, headers: cors })
+    if (req.method === 'OPTIONS') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...cors, 'Access-Control-Max-Age': '86400', 'Content-Type': 'application/json' } })
+    }
+    if (req.method === 'GET') return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } })
     if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405, headers: cors })
     const body = await req.json()
     const event_code = body.event_code || body.eventCode
     const event_id = body.event_id || body.eventId
     let number: number | undefined = body.number ?? body.badgeNumber
     if (number === undefined && body.searchNumber !== undefined) {
-        const n = typeof body.searchNumber === 'string' ? parseInt(body.searchNumber, 10) : body.searchNumber
+        const n = typeof body.searchNumber === 'string' ? Number.parseInt(body.searchNumber, 10) : body.searchNumber
         if (!Number.isNaN(n)) number = n
     }
     const markFound: boolean = !!body.markFound
@@ -38,9 +41,21 @@ Deno.serve(async (req: Request) => {
     if (error) return new Response(error.message, { status: 500, headers: cors })
     if (!guest) return new Response(JSON.stringify({ found: false }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } })
 
+    let resultGuest = guest
+    // Si existe partner_id en metadata, devolver la contraparte como resultado principal
+    try {
+        const partnerId = (guest?.metadata && typeof guest.metadata === 'object') ? (guest.metadata as any).partner_id : undefined
+        if (partnerId) {
+            const { data: partner } = await supabase.from('guests').select('*').eq('id', partnerId).maybeSingle()
+            if (partner) {
+                resultGuest = partner
+            }
+        }
+    } catch { /* ignore */ }
+
     if (markFound) {
         await supabase.from('guests').update({ found: true }).eq('id', guest.id)
     }
 
-    return new Response(JSON.stringify({ found: true, guest }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ found: true, guest: resultGuest }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } })
 })

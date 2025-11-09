@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import logoImage from '../assets/logo.png';
 import { useLanguage } from '../lib/LanguageContext';
-import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, getCurrentUser, importGuestsCsv, type Event as UiEvent } from '../lib/supabase';
+import { speakText as speakTextEdge, generateRooms as generateRoomsEdge, searchGuest as searchGuestEdge, generateQuestions as generateQuestionsEdge, transcribeTalk as transcribeTalkEdge, getEventByCode, getCurrentUser, importGuestsCsv, startEvent as startEventEdge, type Event as UiEvent } from '../lib/supabase';
 import { config } from '../config';
 
 // Interfaz UI de sala (simplificada para visual)
@@ -58,6 +58,9 @@ export function EventPage() {
   const [csvBusy, setCsvBusy] = useState(false);
   const [csvResult, setCsvResult] = useState<{inserted: number; skipped: number} | null>(null);
   const [csvError, setCsvError] = useState<string | null>(null);
+  const [startingEvent, setStartingEvent] = useState(false);
+  const [startMsg, setStartMsg] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
   useEffect(() => {
     // Cargar salas existentes al montar el componente
@@ -480,6 +483,30 @@ export function EventPage() {
     }
   }
 
+  async function handleStartEvent() {
+    if (!eventInfo?.id) return;
+    setStartingEvent(true);
+    setStartMsg(null);
+    setStartError(null);
+    try {
+      // Orquestar inicio completo (badges + rooms + pairing)
+      const { data, error } = await startEventEdge(eventInfo.id, 2, 6);
+      if (error) throw error;
+      const assigned = data?.assigned_badges ?? 0;
+      const roomsCreated = data?.rooms_created ?? 0;
+      const pairs = data?.pairs_created ?? 0;
+      // Refrescar estado local del evento
+      setEventInfo(prev => prev ? { ...prev, status: 'published' } : prev);
+      setStartMsg(`🎫 ${language === 'es' ? 'Badges' : 'Badges'}: ${assigned} · 🚪 ${language === 'es' ? 'Salas' : 'Rooms'}: ${roomsCreated} · 🤝 ${language === 'es' ? 'Pareos' : 'Pairs'}: ${pairs}`);
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      console.error('start event error:', err);
+      setStartError(err.message || 'Error al iniciar evento');
+    } finally {
+      setStartingEvent(false);
+    }
+  }
+
   return (
     <div className="app-container">
       {/* Language Toggle */}
@@ -573,6 +600,17 @@ export function EventPage() {
                 {csvError && (
                   <span style={{ color: '#ef4444' }}>⚠️ {csvError}</span>
                 )}
+                <div style={{ flex: 1 }} />
+                <button
+                  className="btn btn-primary"
+                  onClick={handleStartEvent}
+                  disabled={startingEvent}
+                  title={language === 'es' ? 'Asigna números de badge 1..N y cambia el estado a Publicado' : 'Assign badge numbers 1..N and set status to Published'}
+                >
+                  {startingEvent ? (language === 'es' ? '⏳ Iniciando...' : '⏳ Starting...') : (language === 'es' ? '🚦 Iniciar Evento y Asignar Badges' : '🚦 Start Event & Assign Badges')}
+                </button>
+                {startMsg && <span style={{ color: '#10b981' }}>✅ {startMsg}</span>}
+                {startError && <span style={{ color: '#ef4444' }}>⚠️ {startError}</span>}
               </div>
             </section>
           )}
